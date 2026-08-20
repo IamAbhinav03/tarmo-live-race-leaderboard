@@ -1,0 +1,82 @@
+let currentState = null;
+const form = document.querySelector("#race-form");
+const input = document.querySelector("#player-name");
+const armButton = document.querySelector("#arm-button");
+const message = document.querySelector("#form-message");
+const activeContent = document.querySelector("#active-content");
+
+async function post(path, body = {}) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "Request failed");
+  return result;
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  message.textContent = "";
+  armButton.disabled = true;
+  try {
+    await post("/api/races", { player_name: input.value });
+    input.value = "";
+  } catch (error) {
+    message.textContent = error.message;
+  } finally {
+    armButton.disabled = Boolean(currentState?.active_race);
+  }
+});
+
+document.addEventListener("click", async (event) => {
+  if (!event.target.matches("#cancel-race")) return;
+  event.target.disabled = true;
+  try { await post("/api/races/cancel"); }
+  catch (error) { message.textContent = error.message; }
+});
+
+function statusLabel(status) {
+  return ({ complete: "Classified", cancelled: "Cancelled", error: "Timing error", armed: "Armed", running: "On track" })[status] || status;
+}
+
+function render(state) {
+  currentState = state;
+  document.querySelector("#server-dot").classList.add("live");
+  document.querySelector("#server-status").textContent = "Server live";
+  const active = state.active_race;
+  armButton.disabled = Boolean(active);
+  input.disabled = Boolean(active);
+
+  if (!active) {
+    activeContent.innerHTML = '<div class="active-status">Grid open</div><div class="active-name">No active race</div><div class="active-hint">Register the next driver to arm the timing gate.</div>';
+  } else if (active.status === "armed") {
+    activeContent.innerHTML = `<div class="active-status">Timing armed</div><div class="active-name">${Tarmo.escapeHtml(active.player_name)}</div><div class="active-hint">Waiting for the first two-sensor crossing to start the lap.</div><div class="button-row" style="justify-content:center"><button class="secondary danger" id="cancel-race">Cancel race</button></div>`;
+  } else {
+    activeContent.innerHTML = `<div class="active-status">Lap in progress</div><div class="active-name">${Tarmo.escapeHtml(active.player_name)}</div><div class="active-clock" id="operator-clock">00:00.000</div><div class="active-hint">The next validated crossing records the official time.</div><div class="button-row" style="justify-content:center"><button class="secondary danger" id="cancel-race">Cancel race</button></div>`;
+  }
+
+  const device = state.device;
+  document.querySelector("#device-name").textContent = device ? `${device.device_id} · ${device.transport}` : "Not seen yet";
+  document.querySelector("#device-last").textContent = device ? Tarmo.shortDate(device.received_at) : "—";
+
+  const recent = state.recent_races;
+  document.querySelector("#recent-list").innerHTML = recent.length ? recent.map((race) => `
+    <div class="recent-row">
+      <div><div class="recent-name">${Tarmo.escapeHtml(race.player_name)}</div><div class="recent-meta">${statusLabel(race.status)} · ${Tarmo.shortDate(race.finished_at || race.armed_at)}</div></div>
+      <div class="recent-value">${race.status === "complete" ? Tarmo.formatTime(race.elapsed_us) : (race.error_message ? Tarmo.escapeHtml(race.error_message) : "—")}</div>
+    </div>`).join("") : '<div class="empty">No races recorded yet.</div>';
+}
+
+function tick() {
+  const active = currentState?.active_race;
+  const clock = document.querySelector("#operator-clock");
+  if (clock && active?.started_at) {
+    clock.textContent = Tarmo.formatTime((Date.now() - new Date(active.started_at).getTime()) * 1000);
+  }
+  requestAnimationFrame(tick);
+}
+
+Tarmo.connect(render);
+requestAnimationFrame(tick);

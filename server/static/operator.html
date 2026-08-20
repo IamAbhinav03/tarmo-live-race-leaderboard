@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#080a0d">
+  <title>Race Control — Tarmo Live</title>
+  <meta name="description" content="Operator race registration and timing control.">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="shell topbar">
+    <a class="brand" href="/operator" aria-label="Tarmo Live race control">
+      <span class="brand-mark">T</span>
+      <span class="brand-copy">Race Control<small>Tarmo Live</small></span>
+    </a>
+    <a class="nav-link" href="/leaderboard" target="_blank" rel="noopener">Open leaderboard ↗</a>
+  </header>
+
+  <main class="shell operator-layout">
+    <section class="panel">
+      <div class="panel-kicker">Driver registration</div>
+      <h1>Ready the grid.</h1>
+      <p>Register one driver and arm the timing gate. The first validated crossing starts their lap; the next finishes it.</p>
+      <form id="race-form">
+        <label for="player-name">Driver name</label>
+        <input id="player-name" name="player_name" maxlength="80" autocomplete="off" placeholder="Enter player name" required>
+        <div class="button-row">
+          <button type="submit" id="arm-button">Register &amp; arm race</button>
+        </div>
+        <div class="form-message" id="form-message" role="alert"></div>
+      </form>
+      <div class="device-card">
+        <div><div class="device-label">Timing gate</div><div class="device-value" id="device-name">Not seen yet</div></div>
+        <div><div class="device-label">Last signal</div><div class="device-value" id="device-last">—</div></div>
+      </div>
+    </section>
+
+    <section>
+      <div class="panel active-card" id="active-card" aria-live="polite">
+        <div class="active-content" id="active-content"></div>
+      </div>
+      <div class="mini-head"><h2>Recent runs</h2><span class="status-chip"><span class="status-dot" id="server-dot"></span><span id="server-status">Connecting</span></span></div>
+      <div id="recent-list"></div>
+    </section>
+  </main>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/operator.js"></script>
+</body>
+</html>

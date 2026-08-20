@@ -1,0 +1,7 @@
+{
+  "host": "0.0.0.0",
+  "port": 8080,
+  "database_path": "data/races.db",
+  "serial_port": "auto",
+  "serial_baud": 115200
+}
