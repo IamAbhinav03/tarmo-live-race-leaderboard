@@ -9,16 +9,20 @@
 #define SERVER_HOST "192.168.1.10"
 #define SERVER_PORT 8080
 
-// Static address for this ESP32-C3. All four addresses must match your LAN.
+// Use DHCP while testing on ordinary Wi-Fi. Set this to 1 for the final
+// track installation, then configure all four network addresses below.
+#define USE_STATIC_IP 0
+
+// Static address for the final installation. Ignored when USE_STATIC_IP is 0.
 #define ESP_STATIC_IP 192, 168, 1, 50
 #define ESP_GATEWAY_IP 192, 168, 1, 1
 #define ESP_SUBNET_MASK 255, 255, 255, 0
 #define ESP_DNS_IP 192, 168, 1, 1
 
-// These example GPIOs fit the generic ESP32-C3-DevKitM-1 environment.
-// Verify every pin against the schematic for your exact ESP32-C3 board.
-#define I2C_SDA_PIN 8
-#define I2C_SCL_PIN 9
+// Seeed Studio XIAO ESP32-C3 wiring:
+// D4/GPIO6 = SDA, D5/GPIO7 = SCL, D2/GPIO4 and D3/GPIO5 = XSHUT.
+#define I2C_SDA_PIN 6
+#define I2C_SCL_PIN 7
 #define SENSOR_A_XSHUT_PIN 4
 #define SENSOR_B_XSHUT_PIN 5
 

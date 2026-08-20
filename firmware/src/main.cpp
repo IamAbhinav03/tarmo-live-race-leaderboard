@@ -13,6 +13,10 @@
 #warning "Using placeholder config.example.h; create include/local_config.h before deployment"
 #endif
 
+#ifndef USE_STATIC_IP
+#define USE_STATIC_IP 0
+#endif
+
 namespace {
 
 constexpr size_t kEventQueueSize = 16;
@@ -198,17 +202,20 @@ void maintainWifi(uint32_t nowMs) {
   }
   lastWifiAttemptMs = nowMs;
 
+  WiFi.disconnect(false, false);
+  WiFi.mode(WIFI_STA);
+#if USE_STATIC_IP
   IPAddress localIp(ESP_STATIC_IP);
   IPAddress gateway(ESP_GATEWAY_IP);
   IPAddress subnet(ESP_SUBNET_MASK);
   IPAddress dns(ESP_DNS_IP);
-  WiFi.disconnect(false, false);
-  WiFi.mode(WIFI_STA);
   if (!WiFi.config(localIp, gateway, subnet, dns)) {
     Serial.println("ERROR static IP configuration failed");
   }
+#endif
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.println("DIAG Wi-Fi connection attempt started");
+  Serial.printf("DIAG Wi-Fi connection attempt started mode=%s\n",
+                USE_STATIC_IP ? "static" : "dhcp");
 }
 
 void deliverPendingWifi(uint32_t nowMs) {
