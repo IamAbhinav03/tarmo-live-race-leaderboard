@@ -151,3 +151,5 @@ The leaderboard regression test verifies that sensor telemetry, duplicate delive
 6. **Dual-path test:** Leave USB and Wi-Fi connected. Each crossing is delivered twice with the same event ID, but the server must advance the race only once.
 7. **Failure tests:** Repeat a race once with Wi-Fi disconnected to verify USB-only timing, and once with USB disconnected after starting the server to verify Wi-Fi-only timing.
 8. **Placement calibration:** At realistic car speed, tune `DETECTION_MAX_MM`, required stable samples, coincidence window, and lockout. Test bright light, dark bodywork, angled approaches, and a stationary object near only one sensor.
+
+Set `SENSOR_LONG_RANGE_MODE` to `1` with a 33,000 µs timing budget when experimentally testing beyond the high-speed profile's normal range. Long range trades sample speed and ambient-light tolerance for distance; validate it with the actual car and lighting before race use.

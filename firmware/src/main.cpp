@@ -17,6 +17,10 @@
 #define USE_STATIC_IP 0
 #endif
 
+#ifndef SENSOR_LONG_RANGE_MODE
+#define SENSOR_LONG_RANGE_MODE 0
+#endif
+
 namespace {
 
 constexpr size_t kEventQueueSize = 16;
@@ -228,8 +232,13 @@ bool initializeSensors() {
     return false;
   }
 
+#if SENSOR_LONG_RANGE_MODE
+  sensorA.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_LONG_RANGE);
+  sensorB.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_LONG_RANGE);
+#else
   sensorA.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_HIGH_SPEED);
   sensorB.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_HIGH_SPEED);
+#endif
   sensorA.setMeasurementTimingBudgetMicroSeconds(SENSOR_TIMING_BUDGET_US);
   sensorB.setMeasurementTimingBudgetMicroSeconds(SENSOR_TIMING_BUDGET_US);
   emitFirmwareLog("info", "sensors_ready", "Both VL53L0X sensors initialized");
