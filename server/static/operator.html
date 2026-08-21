@@ -43,6 +43,32 @@
       <div class="mini-head"><h2>Recent runs</h2><span class="status-chip"><span class="status-dot" id="server-dot"></span><span id="server-status">Connecting</span></span></div>
       <div id="recent-list"></div>
     </section>
+
+    <section class="panel log-panel" aria-labelledby="log-title">
+      <div class="log-head">
+        <div>
+          <div class="panel-kicker">Persistent telemetry</div>
+          <h2 id="log-title">Timing audit log</h2>
+        </div>
+        <div class="log-controls">
+          <label for="log-filter">Show</label>
+          <select id="log-filter">
+            <option value="all">All activity</option>
+            <option value="sensor">Sensors</option>
+            <option value="usb">USB</option>
+            <option value="wifi">Wi-Fi</option>
+            <option value="race">Race decisions</option>
+            <option value="warning">Warnings</option>
+            <option value="error">Errors</option>
+          </select>
+          <button class="secondary compact" id="pause-logs" type="button">Pause</button>
+        </div>
+      </div>
+      <p class="log-note">Newest first. Entries are persisted in SQLite, including duplicates received over the second communication path.</p>
+      <div class="log-list" id="log-list" aria-live="polite">
+        <div class="empty">Waiting for telemetry…</div>
+      </div>
+    </section>
   </main>
 
   <script src="/static/common.js"></script>

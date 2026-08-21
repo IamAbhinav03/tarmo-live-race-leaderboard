@@ -27,6 +27,7 @@ Adafruit_VL53L0X sensorB;
 
 struct SensorState {
   uint16_t distanceMm = 8190;
+  uint8_t rangeStatus = 0;
   uint8_t nearSamples = 0;
   uint8_t clearSamples = 0;
   bool near = false;
@@ -52,9 +53,45 @@ uint32_t eventSequence = 0;
 uint32_t lastWifiAttemptMs = 0;
 uint32_t crossingLockedAtMs = 0;
 bool crossingLocked = false;
+bool wifiConnectionReported = false;
+int lastWifiDeliveryStatus = 0;
 
 bool elapsedAtLeast(uint32_t now, uint32_t then, uint32_t interval) {
   return static_cast<uint32_t>(now - then) >= interval;
+}
+
+void emitFirmwareLog(const char *level, const char *code, const char *message,
+                     const char *sensor = nullptr, uint16_t distanceMm = 0,
+                     uint8_t rangeStatus = 0) {
+  ++eventSequence;
+  char eventId[80];
+  snprintf(eventId, sizeof(eventId), "%s-%08lx-%lu", DEVICE_ID,
+           static_cast<unsigned long>(bootId), static_cast<unsigned long>(eventSequence));
+
+  char json[kJsonSize];
+  if (sensor != nullptr) {
+    snprintf(
+        json, sizeof(json),
+        "{\"event_id\":\"%s\",\"device_id\":\"%s\",\"boot_id\":\"%08lx\","
+        "\"sequence\":%lu,\"type\":\"log\",\"device_time_us\":%lld,"
+        "\"level\":\"%s\",\"code\":\"%s\",\"message\":\"%s\","
+        "\"sensor\":\"%s\",\"distance_mm\":%u,\"range_status\":%u}",
+        eventId, DEVICE_ID, static_cast<unsigned long>(bootId),
+        static_cast<unsigned long>(eventSequence), static_cast<long long>(esp_timer_get_time()),
+        level, code, message, sensor, distanceMm, rangeStatus);
+  } else {
+    snprintf(
+        json, sizeof(json),
+        "{\"event_id\":\"%s\",\"device_id\":\"%s\",\"boot_id\":\"%08lx\","
+        "\"sequence\":%lu,\"type\":\"log\",\"device_time_us\":%lld,"
+        "\"level\":\"%s\",\"code\":\"%s\",\"message\":\"%s\"}",
+        eventId, DEVICE_ID, static_cast<unsigned long>(bootId),
+        static_cast<unsigned long>(eventSequence), static_cast<long long>(esp_timer_get_time()),
+        level, code, message);
+  }
+  // Fine-grained telemetry stays on USB so it cannot delay sensor sampling or
+  // displace timing events from the Wi-Fi retry queue.
+  Serial.println(json);
 }
 
 bool isValidNearReading(uint16_t distanceMm, uint8_t rangeStatus) {
@@ -63,6 +100,7 @@ bool isValidNearReading(uint16_t distanceMm, uint8_t rangeStatus) {
 
 void updateSensorState(SensorState &state, uint16_t distanceMm, uint8_t rangeStatus, uint32_t nowMs) {
   state.distanceMm = distanceMm;
+  state.rangeStatus = rangeStatus;
   const bool sampleNear = isValidNearReading(distanceMm, rangeStatus);
 
   if (sampleNear) {
@@ -92,6 +130,8 @@ void enqueueForWifi(const char *json) {
     eventQueue[queueHead].occupied = false;
     queueHead = (queueHead + 1) % kEventQueueSize;
     --queueCount;
+    emitFirmwareLog("error", "wifi_queue_overflow",
+                    "Oldest pending crossing dropped from Wi-Fi retry queue");
   }
 
   PendingEvent &slot = eventQueue[queueTail];
@@ -118,8 +158,7 @@ void emitCrossingEvent(int64_t deviceTimeUs) {
       static_cast<unsigned long>(eventSequence), static_cast<long long>(deviceTimeUs),
       stateA.distanceMm, stateB.distanceMm);
 
-  // USB delivery is immediate. Diagnostic output never begins with "{" so the
-  // bridge can distinguish it from machine-readable events.
+  // USB delivery is immediate; Wi-Fi uses the retry queue with the same ID.
   Serial.println(json);
   enqueueForWifi(json);
 }
@@ -131,7 +170,7 @@ void updateCrossingDetector(uint32_t nowMs) {
       crossingLocked = false;
       stateA.detectionSeen = false;
       stateB.detectionSeen = false;
-      Serial.println("DIAG crossing detector re-armed");
+      emitFirmwareLog("info", "gate_rearmed", "Both sensors clear; gate re-armed");
     }
     return;
   }
@@ -155,12 +194,16 @@ void updateCrossingDetector(uint32_t nowMs) {
   if (stateA.detectionSeen && !stateB.detectionSeen &&
       elapsedAtLeast(nowMs, stateA.detectedAtMs, SENSOR_COINCIDENCE_MS)) {
     stateA.detectionSeen = false;
-    Serial.println("DIAG rejected sensor A-only detection");
+    emitFirmwareLog("warning", "sensor_single_rejected",
+                    "Sensor A activation expired without Sensor B", "A",
+                    stateA.distanceMm, stateA.rangeStatus);
   }
   if (stateB.detectionSeen && !stateA.detectionSeen &&
       elapsedAtLeast(nowMs, stateB.detectedAtMs, SENSOR_COINCIDENCE_MS)) {
     stateB.detectionSeen = false;
-    Serial.println("DIAG rejected sensor B-only detection");
+    emitFirmwareLog("warning", "sensor_single_rejected",
+                    "Sensor B activation expired without Sensor A", "B",
+                    stateB.distanceMm, stateB.rangeStatus);
   }
 }
 
@@ -174,14 +217,14 @@ bool initializeSensors() {
   digitalWrite(SENSOR_A_XSHUT_PIN, HIGH);
   delay(20);
   if (!sensorA.begin(SENSOR_A_I2C_ADDRESS, false, &Wire)) {
-    Serial.println("ERROR sensor A failed to initialize");
+    emitFirmwareLog("error", "sensor_init_failed", "Sensor A failed to initialize", "A");
     return false;
   }
 
   digitalWrite(SENSOR_B_XSHUT_PIN, HIGH);
   delay(20);
   if (!sensorB.begin(SENSOR_B_I2C_ADDRESS, false, &Wire)) {
-    Serial.println("ERROR sensor B failed to initialize");
+    emitFirmwareLog("error", "sensor_init_failed", "Sensor B failed to initialize", "B");
     return false;
   }
 
@@ -189,13 +232,21 @@ bool initializeSensors() {
   sensorB.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_HIGH_SPEED);
   sensorA.setMeasurementTimingBudgetMicroSeconds(SENSOR_TIMING_BUDGET_US);
   sensorB.setMeasurementTimingBudgetMicroSeconds(SENSOR_TIMING_BUDGET_US);
-  Serial.println("DIAG both VL53L0X sensors ready");
+  emitFirmwareLog("info", "sensors_ready", "Both VL53L0X sensors initialized");
   return true;
 }
 
 void maintainWifi(uint32_t nowMs) {
   if (WiFi.status() == WL_CONNECTED) {
+    if (!wifiConnectionReported) {
+      wifiConnectionReported = true;
+      emitFirmwareLog("info", "wifi_connected", "Wi-Fi connected using configured network mode");
+    }
     return;
+  }
+  if (wifiConnectionReported) {
+    wifiConnectionReported = false;
+    emitFirmwareLog("warning", "wifi_disconnected", "Wi-Fi connection lost");
   }
   if (!elapsedAtLeast(nowMs, lastWifiAttemptMs, WIFI_RETRY_INTERVAL_MS)) {
     return;
@@ -210,12 +261,13 @@ void maintainWifi(uint32_t nowMs) {
   IPAddress subnet(ESP_SUBNET_MASK);
   IPAddress dns(ESP_DNS_IP);
   if (!WiFi.config(localIp, gateway, subnet, dns)) {
-    Serial.println("ERROR static IP configuration failed");
+    emitFirmwareLog("error", "static_ip_failed", "Static IP configuration failed");
   }
 #endif
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.printf("DIAG Wi-Fi connection attempt started mode=%s\n",
-                USE_STATIC_IP ? "static" : "dhcp");
+  emitFirmwareLog("info", "wifi_connecting",
+                  USE_STATIC_IP ? "Wi-Fi static-IP connection attempt started"
+                                : "Wi-Fi DHCP connection attempt started");
 }
 
 void deliverPendingWifi(uint32_t nowMs) {
@@ -244,9 +296,20 @@ void deliverPendingWifi(uint32_t nowMs) {
   const int status = http.POST(String(event.json));
   http.end();
   if (status >= 200 && status < 300) {
+    if (lastWifiDeliveryStatus < 200 || lastWifiDeliveryStatus >= 300) {
+      emitFirmwareLog("info", "wifi_delivery_restored",
+                      "Wi-Fi crossing delivery accepted by server");
+    }
+    lastWifiDeliveryStatus = status;
     event.occupied = false;
     queueHead = (queueHead + 1) % kEventQueueSize;
     --queueCount;
+  } else {
+    if (lastWifiDeliveryStatus != status) {
+      emitFirmwareLog("warning", "wifi_delivery_failed",
+                      "Wi-Fi crossing delivery failed; event remains queued");
+    }
+    lastWifiDeliveryStatus = status;
   }
 }
 
@@ -255,8 +318,24 @@ void readSensors(uint32_t nowMs) {
   VL53L0X_RangingMeasurementData_t measurementB;
   sensorA.rangingTest(&measurementA, false);
   sensorB.rangingTest(&measurementB, false);
+  const bool wasNearA = stateA.near;
+  const bool wasNearB = stateB.near;
   updateSensorState(stateA, measurementA.RangeMilliMeter, measurementA.RangeStatus, nowMs);
   updateSensorState(stateB, measurementB.RangeMilliMeter, measurementB.RangeStatus, nowMs);
+  if (!wasNearA && stateA.near) {
+    emitFirmwareLog("info", "sensor_activated", "Sensor A entered detection range", "A",
+                    measurementA.RangeMilliMeter, measurementA.RangeStatus);
+  } else if (wasNearA && !stateA.near) {
+    emitFirmwareLog("info", "sensor_cleared", "Sensor A cleared", "A",
+                    measurementA.RangeMilliMeter, measurementA.RangeStatus);
+  }
+  if (!wasNearB && stateB.near) {
+    emitFirmwareLog("info", "sensor_activated", "Sensor B entered detection range", "B",
+                    measurementB.RangeMilliMeter, measurementB.RangeStatus);
+  } else if (wasNearB && !stateB.near) {
+    emitFirmwareLog("info", "sensor_cleared", "Sensor B cleared", "B",
+                    measurementB.RangeMilliMeter, measurementB.RangeStatus);
+  }
 }
 
 }  // namespace
@@ -265,13 +344,13 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
   bootId = esp_random();
-  Serial.printf("DIAG Tarmo gate boot=%08lx device=%s\n",
-                static_cast<unsigned long>(bootId), DEVICE_ID);
+  emitFirmwareLog("info", "device_boot", "Tarmo timing gate booted");
 
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
   Wire.setClock(400000);
   if (!initializeSensors()) {
-    Serial.println("ERROR sensor initialization halted; check power, XSHUT pins, and I2C wiring");
+    emitFirmwareLog("error", "sensor_initialization_halted",
+                    "Sensor initialization halted; check power, XSHUT, and I2C wiring");
     while (true) {
       delay(1000);
     }

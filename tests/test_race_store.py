@@ -53,6 +53,14 @@ class RaceStoreTests(unittest.TestCase):
         self.assertTrue(first["race_changed"])
         self.assertTrue(duplicate["duplicate"])
         self.assertEqual(self.store.state()["active_race"]["status"], "running")
+        transport_logs = [
+            row for row in self.store.logs()
+            if row["event_id"] == event["event_id"] and row["source"] == "transport"
+        ]
+        self.assertEqual(
+            [(row["code"], row["transport"]) for row in reversed(transport_logs)],
+            [("event_accepted", "usb"), ("event_duplicate", "wifi")],
+        )
 
     def test_fastest_lap_is_ranked_first(self):
         self.store.arm_race("First")
@@ -80,6 +88,65 @@ class RaceStoreTests(unittest.TestCase):
         self.store.arm_race("Jamie")
         with self.assertRaises(RaceError):
             self.store.ingest_event({"type": "crossing"}, "usb")
+        self.assertEqual(self.store.logs()[0]["code"], "event_rejected")
+        self.assertEqual(self.store.logs()[0]["transport"], "usb")
+
+    def test_crossing_without_active_race_is_stored_and_audited(self):
+        result = self.store.ingest_event(crossing(1, 1_000_000), "wifi")
+        self.assertFalse(result["race_changed"])
+        self.assertEqual(self.store.logs()[0]["code"], "crossing_ignored_no_active_race")
+
+    def test_firmware_sensor_telemetry_is_structured(self):
+        event = {
+            **crossing(7, 7_000_000),
+            "type": "log",
+            "level": "info",
+            "code": "sensor_activated",
+            "message": "Sensor A entered detection range",
+            "sensor": "A",
+            "distance_mm": 188,
+            "range_status": 0,
+        }
+        result = self.store.ingest_event(event, "usb")
+        self.assertTrue(result["accepted"])
+        firmware_log = next(row for row in self.store.logs() if row["source"] == "firmware")
+        self.assertEqual(firmware_log["code"], "sensor_activated")
+        self.assertEqual(firmware_log["details"]["sensor"], "A")
+        self.assertEqual(firmware_log["details"]["distance_mm"], 188)
+
+    def test_reused_event_id_with_different_payload_is_a_conflict(self):
+        self.store.arm_race("Conflict")
+        original = crossing(1, 1_000_000)
+        self.store.ingest_event(original, "usb")
+        altered = {**original, "device_time_us": 9_000_000}
+        result = self.store.ingest_event(altered, "wifi")
+        self.assertFalse(result["accepted"])
+        self.assertTrue(result["conflict"])
+        self.assertEqual(self.store.logs()[0]["code"], "event_id_conflict")
+        self.assertEqual(self.store.state()["active_race"]["status"], "running")
+
+    def test_restart_error_and_timestamp_rejection_are_audited(self):
+        self.store.arm_race("Restart")
+        self.store.ingest_event(crossing(1, 5_000_000, "boot-a"), "usb")
+        self.store.ingest_event(crossing(2, 1_000_000, "boot-b"), "wifi")
+        self.assertEqual(self.store.logs()[0]["code"], "race_failed_device_restart")
+
+        self.store.arm_race("Rollback")
+        self.store.ingest_event(crossing(3, 8_000_000, "boot-c"), "usb")
+        with self.assertRaises(RaceError):
+            self.store.ingest_event(crossing(4, 7_000_000, "boot-c"), "wifi")
+        self.assertEqual(self.store.logs()[0]["code"], "event_rejected")
+
+    def test_audit_logs_persist_after_reopening_database(self):
+        database_path = Path(self.temp_dir.name) / "persistent.db"
+        first = RaceStore(database_path)
+        first.record_log("info", "test", "persistent", "Stored on disk")
+        first.close()
+        second = RaceStore(database_path)
+        try:
+            self.assertEqual(second.logs()[0]["code"], "persistent")
+        finally:
+            second.close()
 
 
 if __name__ == "__main__":

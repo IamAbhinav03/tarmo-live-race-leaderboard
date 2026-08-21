@@ -1,0 +1,9 @@
+{
+  "host": "127.0.0.1",
+  "port": 8081,
+  "database_path": "data/emulator.db",
+  "serial_port": null,
+  "serial_baud": 115200,
+  "emulator_enabled": true,
+  "audit_log_limit": 100000
+}

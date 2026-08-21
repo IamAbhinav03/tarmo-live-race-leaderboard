@@ -63,6 +63,63 @@ The server automatically looks for `/dev/cu.usbmodem*` and `/dev/cu.usbserial*` 
 
 The SQLite database is stored at `server/data/races.db` by default. Back up that file to preserve race history.
 
+## Persistent timing logs
+
+The operator page includes a live, filterable audit log. Logs are appended to the `audit_logs` table in the same SQLite database as the races, so they survive browser refreshes and server restarts. Each row includes a UTC timestamp, severity, source, code, message, transport, event ID, race ID, and structured details.
+
+The server records every transport attempt, not only the first copy of an event:
+
+- `event_accepted`: the first USB or Wi-Fi copy was stored.
+- `event_duplicate`: the other path delivered the same event ID and was safely deduplicated.
+- `event_id_conflict`: an event ID was reused with different contents; the conflicting copy was rejected.
+- `crossing_ignored_no_active_race`: a real crossing arrived while no driver was armed.
+- `race_started`, `race_finished`, `race_failed_device_restart`: official timing decisions.
+- `event_rejected`: malformed input or an impossible timestamp was rejected.
+- `usb_connected`, `usb_disconnected`: serial bridge state.
+- `sensor_activated`, `sensor_cleared`, `sensor_single_rejected`, `gate_rearmed`: firmware sensor decisions received over USB.
+- `wifi_connected`, `wifi_disconnected`, `wifi_delivery_failed`, `wifi_delivery_restored`: firmware connectivity transitions received over USB.
+
+Fine-grained sensor telemetry is intentionally USB-only. Sending every sensor transition over Wi-Fi would add blocking network work to the measurement loop and could displace official crossings from the retry queue. Official crossing events still use both USB and Wi-Fi with the same event ID.
+
+Recent logs are available as JSON at `GET /api/logs?limit=250`. Up to 1,000 rows can be requested at once, and older pages use `before_id`. Logs remain in SQLite across restarts. `audit_log_limit` defaults to 100,000 rows so a long-running noisy sensor cannot fill the computer's disk; increase it in `server/config.json` if longer retention is required.
+
+## Safe edge-case emulator
+
+The emulator runs on a separate port and database, with no serial device, so it cannot alter the real leaderboard:
+
+```bash
+python3 server/app.py --config server/config.emulator.example.json
+python3 tools/emulate_edge_cases.py --server http://127.0.0.1:8081
+```
+
+Open `http://localhost:8081/operator` to inspect the generated logs. The emulator endpoint is disabled in the normal server configuration and rejects non-local clients even when enabled.
+
+The automated scenario checks a crossing with no armed race, structured sensor telemetry, USB-first/Wi-Fi-second deduplication, Wi-Fi-first/USB-second deduplication, a normal timed lap, an ESP32 restart during a lap, a non-monotonic timestamp, and a malformed payload.
+
+## Track validation matrix
+
+| Test | How to emulate | Expected audit log and behavior |
+|---|---|---|
+| Sensor A only | Cover only A for more than 120 ms, then uncover it | `sensor_activated` A, `sensor_single_rejected` A, `sensor_cleared`; no crossing and no race transition |
+| Sensor B only | Repeat with B | Same B sequence; no crossing |
+| Sensors too far apart | Cover A, wait more than 120 ms, then cover B | Two single-sensor rejections; no crossing |
+| Valid crossing | Move a flat target through both beams together | A and B activation, one `event_accepted`, race starts or finishes |
+| Object held in beam | Keep the target present for several seconds | Only one crossing; no second crossing until both sensors clear and `gate_rearmed` appears |
+| Reflection/bounce during lockout | Remove and immediately reinsert within 800 ms | No additional crossing before re-arm |
+| No race armed | Perform a valid crossing from the grid-open state | `crossing_ignored_no_active_race`; leaderboard unchanged |
+| Both communication paths | Keep USB and Wi-Fi connected and cross once | One `event_accepted` and one `event_duplicate` with the same event ID; race advances once |
+| Wi-Fi unavailable | Stop the server or use an unreachable `SERVER_HOST`, keep USB connected, and cross | USB accepts immediately; `wifi_delivery_failed`; once restored, Wi-Fi copy becomes `event_duplicate` |
+| USB unavailable | Unplug USB while powering the gate separately, keep Wi-Fi/server active, and cross | Wi-Fi `event_accepted`; `usb_disconnected`; sensor-level logs are unavailable during the unplugged interval |
+| Server unavailable on both paths | Stop the server, cross, then restart without rebooting ESP32 | Wi-Fi event retries; USB serial data is only recoverable if a bridge was reading it. Queued Wi-Fi crossing arrives after restart |
+| ESP32 restart before finish | Start a race, reset the ESP32, then cross again | `race_failed_device_restart`; race becomes timing error, never a false lap time |
+| Duplicate/replayed event | Run the software emulator | `event_duplicate`; active race does not advance twice |
+| Timestamp moves backward | Run the software emulator | HTTP 400 and `event_rejected`; active race remains running until cancelled |
+| Malformed event | Run the software emulator | HTTP 400 and `event_rejected`; no race change |
+| Sensor unplugged at boot | Power off, disconnect one module, then boot | `sensor_init_failed` and `sensor_initialization_halted`; gate fails closed |
+| Persistence | Complete a test, stop and restart the server | Races and audit rows remain visible |
+
+For the physical tests, start with no active race unless the row explicitly tests a race transition. Clear both beams between cases and wait for `gate_rearmed`. Pause the log view when inspecting a noisy sequence; pausing affects only the browser, not SQLite recording.
+
 ## Reliability model
 
 - A crossing is valid only when both sensors transition to a stable near reading inside `SENSOR_COINCIDENCE_MS`.
