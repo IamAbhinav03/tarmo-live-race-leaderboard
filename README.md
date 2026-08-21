@@ -1,6 +1,6 @@
-# Tarmo Live Race Leaderboard
+# Tarmo Competition Leaderboards
 
-A local, fault-tolerant lap timer for a one-car, one-lap race. Two VL53L0X sensors must agree on a crossing before the ESP32-C3 emits an event. Every event is sent over Wi-Fi and USB serial; the track-side server deduplicates the two copies, stores races in SQLite, and updates the operator console and public leaderboard live.
+A local competition system with two live classifications: the sensor-timed **Tarmo Live** race and the manually measured **Tarmo Cannon Clash**. Two VL53L0X sensors must agree on a race crossing before the ESP32-C3 emits an event. Every event is sent over Wi-Fi and USB serial; the track-side server deduplicates the two copies, stores all results in SQLite, and updates the operator console and public display live.
 
 ## How a race works
 
@@ -9,6 +9,15 @@ A local, fault-tolerant lap timer for a one-car, one-lap race. Two VL53L0X senso
 3. The second confirmed crossing finishes the single lap.
 4. The firmware's microsecond clock supplies the official elapsed time, so network or USB latency does not affect the result.
 5. The result is persisted and appears immediately on `/leaderboard`, sorted fastest first.
+
+## How Cannon Clash works
+
+1. In `/operator`, select **Cannon Clash**.
+2. Enter the participant, measured distance, and measurement unit.
+3. Record as many attempts as needed. Every attempt is retained in SQLite.
+4. The public classification shows each participant once, ranked by their longest attempt.
+
+Distances can be entered in metres, centimetres, feet, inches, or millimetres. The server normalizes them to millimetres before comparison. The public display starts in split mode; use its controls to show only Tarmo Live, only Cannon Clash, or enter fullscreen. The selected layout is also addressable with `?view=both`, `?view=race`, or `?view=cannon`.
 
 ## Project layout
 
@@ -61,7 +70,7 @@ Open:
 
 The server automatically looks for `/dev/cu.usbmodem*` and `/dev/cu.usbserial*` on macOS and `/dev/ttyACM*` or `/dev/ttyUSB*` on Linux. To select a device explicitly, set `serial_port` in `server/config.json`. Set it to `null` to disable USB ingestion.
 
-The SQLite database is stored at `server/data/races.db` by default. Back up that file to preserve race history.
+The SQLite database is stored at `server/data/races.db` by default. Back up that file to preserve race history, cannon attempts, and audit logs.
 
 ## Persistent timing logs
 
@@ -139,7 +148,7 @@ python3 -m unittest discover -s tests -v
 node tests/test_leaderboard.cjs
 ```
 
-The leaderboard regression test verifies that sensor telemetry, duplicate deliveries, and unchanged state envelopes do not rebuild or reanimate classification rows. Only a genuine change to the ordered completed-race data may replace those rows.
+The leaderboard regression test verifies that sensor telemetry, duplicate deliveries, and unchanged state envelopes do not rebuild or reanimate either classification. Only a genuine change to the corresponding race or cannon ranking may replace its rows.
 
 ### Breadboard test sequence
 

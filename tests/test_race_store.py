@@ -182,6 +182,30 @@ class RaceStoreTests(unittest.TestCase):
         bridge._handle_line(encoded)
         self.assertEqual(bus.version, 1)
 
+    def test_cannon_clash_converts_units_and_ranks_personal_bests(self):
+        first = self.store.record_cannon_result("  Alex   Morgan ", "10", "ft")
+        self.assertEqual(first["player_name"], "Alex Morgan")
+        self.assertEqual(first["distance_mm"], 3048)
+        self.store.record_cannon_result("alex morgan", "4", "m")
+        self.store.record_cannon_result("Casey", "350", "cm")
+
+        state = self.store.state()
+        self.assertEqual(
+            [(row["player_name"], row["distance_mm"]) for row in state["cannon_leaderboard"]],
+            [("alex morgan", 4000), ("Casey", 3500)],
+        )
+        self.assertEqual(len(state["recent_cannon"]), 3)
+        self.assertEqual(self.store.logs()[0]["code"], "cannon_result_recorded")
+
+    def test_cannon_clash_rejects_invalid_measurements(self):
+        for distance, unit in (
+            ("0", "m"), ("not-a-number", "m"), ("5", "yards"),
+            ("0.49", "mm"), ("100000000.5", "mm"),
+        ):
+            with self.subTest(distance=distance, unit=unit):
+                with self.assertRaises(RaceError):
+                    self.store.record_cannon_result("Jordan", distance, unit)
+
 
 if __name__ == "__main__":
     unittest.main()

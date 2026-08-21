@@ -17,6 +17,9 @@ const Tarmo = (() => {
     return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short" }).format(new Date(iso));
   };
 
+  const formatDistance = (millimetres) => `${(Number(millimetres) / 1000).toFixed(2)} m`;
+  const formatFeet = (millimetres) => `${(Number(millimetres) / 304.8).toFixed(1)} ft`;
+
   const connect = (render) => {
     let polling;
     const apply = (state) => render(state);
@@ -34,5 +37,5 @@ const Tarmo = (() => {
     return fetchState;
   };
 
-  return { formatTime, escapeHtml, shortDate, connect };
+  return { formatTime, formatDistance, formatFeet, escapeHtml, shortDate, connect };
 })();

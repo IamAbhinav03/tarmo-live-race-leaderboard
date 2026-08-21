@@ -4,43 +4,61 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#080a0d">
-  <title>Tarmo Live — Race Leaderboard</title>
-  <meta name="description" content="Live one-lap race timing from Tarmo Race.">
+  <title>Tarmo Live — Competition Leaderboards</title>
+  <meta name="description" content="Live Tarmo race and Cannon Clash leaderboards.">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
+<body class="leaderboard-page view-both">
   <header class="shell topbar">
-    <a class="brand" href="/leaderboard" aria-label="Tarmo Live leaderboard">
+    <a class="brand" href="/leaderboard" aria-label="Tarmo competition leaderboards">
       <span class="brand-mark">T</span>
-      <span class="brand-copy">Tarmo Live<small>Race control system</small></span>
+      <span class="brand-copy">Tarmo Live<small>Competition control system</small></span>
     </a>
-    <span class="status-chip"><span class="status-dot" id="connection-dot"></span><span id="connection-label">Connecting</span></span>
+    <div class="display-actions">
+      <div class="view-switch" role="group" aria-label="Leaderboard layout">
+        <button type="button" class="view-option active" data-view="both">Split</button>
+        <button type="button" class="view-option" data-view="race">Tarmo Live</button>
+        <button type="button" class="view-option" data-view="cannon">Cannon Clash</button>
+      </div>
+      <button type="button" class="fullscreen-button" id="fullscreen-button">Fullscreen</button>
+      <span class="status-chip"><span class="status-dot" id="connection-dot"></span><span id="connection-label">Connecting</span></span>
+    </div>
   </header>
 
-  <main class="shell">
-    <section class="hero">
-      <div>
-        <div class="eyebrow">One lap. No excuses.</div>
-        <h1>Chase the<br><span>fastest line.</span></h1>
-      </div>
-      <p class="hero-copy">Every millisecond counts. Two-sensor validated timing, live from the start–finish gate.</p>
-    </section>
+  <main class="shell display-main">
+    <div class="dual-leaderboards" id="dual-leaderboards">
+      <section class="competition-board race-board" id="race-board" aria-labelledby="race-board-title">
+        <div class="board-title-row">
+          <div><div class="eyebrow">One lap. No excuses.</div><h1 id="race-board-title">Tarmo <span>Live</span></h1></div>
+          <div class="board-rule"><span id="entry-count">0</span> classified<br>Fastest time leads</div>
+        </div>
+        <section class="race-strip waiting" id="race-strip" aria-live="polite">
+          <div class="race-state">
+            <div class="race-label" id="race-label">Grid status</div>
+            <div class="race-name" id="race-name">Waiting for next driver</div>
+          </div>
+          <div class="live-time" id="live-time">--:--.---</div>
+        </section>
+        <div class="board-list-title"><h2>Race classification</h2><span>Official lap time</span></div>
+        <div class="leader-grid" id="leader-grid"></div>
+      </section>
 
-    <section class="race-strip waiting" id="race-strip" aria-live="polite">
-      <div class="race-state">
-        <div class="race-label" id="race-label">Grid status</div>
-        <div class="race-name" id="race-name">Waiting for next driver</div>
-      </div>
-      <div class="live-time" id="live-time">--:--.---</div>
-    </section>
-
-    <section>
-      <div class="section-head">
-        <h2>Live classification</h2>
-        <div class="meta"><span id="entry-count">0</span> classified<br>Fastest time leads</div>
-      </div>
-      <div class="leader-grid" id="leader-grid"></div>
-    </section>
+      <section class="competition-board cannon-board" id="cannon-board" aria-labelledby="cannon-board-title">
+        <div class="board-title-row">
+          <div><div class="eyebrow">Load. Launch. Lead.</div><h1 id="cannon-board-title">Cannon <span>Clash</span></h1></div>
+          <div class="board-rule"><span id="cannon-entry-count">0</span> challengers<br>Longest shot wins</div>
+        </div>
+        <section class="cannon-strip waiting" id="cannon-strip" aria-live="polite">
+          <div class="race-state">
+            <div class="race-label">Current distance to beat</div>
+            <div class="race-name" id="cannon-leader-name">Waiting for first launch</div>
+          </div>
+          <div class="cannon-distance" id="cannon-leading-distance">--.-- m</div>
+        </section>
+        <div class="board-list-title"><h2>Distance classification</h2><span>Personal best attempts</span></div>
+        <div class="leader-grid cannon-grid" id="cannon-grid"></div>
+      </section>
+    </div>
   </main>
 
   <script src="/static/common.js"></script>

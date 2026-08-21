@@ -13,6 +13,7 @@ import termios
 import threading
 import time
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -89,11 +90,19 @@ class RaceStore:
                     race_id INTEGER,
                     details_json TEXT NOT NULL DEFAULT '{}'
                 );
+                CREATE TABLE IF NOT EXISTS cannon_results (
+                    id INTEGER PRIMARY KEY,
+                    player_name TEXT NOT NULL,
+                    distance_mm INTEGER NOT NULL CHECK(distance_mm > 0),
+                    recorded_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_races_status ON races(status);
                 CREATE INDEX IF NOT EXISTS idx_races_elapsed ON races(elapsed_us) WHERE status = 'complete';
                 CREATE INDEX IF NOT EXISTS idx_device_events_received ON device_events(received_at);
                 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
                 CREATE INDEX IF NOT EXISTS idx_audit_logs_code ON audit_logs(code);
+                CREATE INDEX IF NOT EXISTS idx_cannon_results_distance
+                    ON cannon_results(distance_mm DESC, recorded_at ASC);
                 PRAGMA optimize;
                 """
             )
@@ -199,6 +208,66 @@ class RaceStore:
                 f"Race cancelled for {active['player_name']}", race_id=active["id"],
             )
         return self.get_race(active["id"])
+
+    def record_cannon_result(
+        self, player_name: str, distance: Any, unit: str,
+    ) -> dict[str, Any]:
+        name = " ".join(player_name.strip().split())
+        if not name:
+            raise RaceError("Participant name is required")
+        if len(name) > 80:
+            raise RaceError("Participant name must be 80 characters or fewer")
+        multipliers = {
+            "mm": Decimal("1"), "cm": Decimal("10"), "m": Decimal("1000"),
+            "in": Decimal("25.4"), "ft": Decimal("304.8"),
+        }
+        clean_unit = str(unit).strip().lower()
+        if clean_unit not in multipliers:
+            raise RaceError("Distance unit must be mm, cm, m, in, or ft")
+        try:
+            numeric_distance = Decimal(str(distance))
+        except (InvalidOperation, ValueError) as exc:
+            raise RaceError("Distance must be a number") from exc
+        if not numeric_distance.is_finite() or numeric_distance <= 0:
+            raise RaceError("Distance must be greater than zero")
+        normalized_mm = numeric_distance * multipliers[clean_unit]
+        if normalized_mm < Decimal("0.5"):
+            raise RaceError("Distance must be at least 0.5 mm")
+        if normalized_mm >= Decimal("100000000.5"):
+            raise RaceError("Distance is outside the supported range")
+        distance_mm = int(normalized_mm.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        now = utc_now()
+        with self.lock, self.connection:
+            result_id = self.connection.execute(
+                """
+                INSERT INTO cannon_results(player_name, distance_mm, recorded_at)
+                VALUES (?, ?, ?)
+                """,
+                (name, distance_mm, now),
+            ).lastrowid
+            self._append_log(
+                "info", "operator", "cannon_result_recorded",
+                f"Cannon Clash result recorded for {name}",
+                details={
+                    "result_id": result_id, "player_name": name,
+                    "distance_mm": distance_mm, "entered_distance": str(distance),
+                    "entered_unit": clean_unit,
+                },
+            )
+        return self.get_cannon_result(result_id)
+
+    def get_cannon_result(self, result_id: int) -> dict[str, Any]:
+        with self.lock:
+            row = self.connection.execute(
+                """
+                SELECT id, player_name, distance_mm, recorded_at
+                FROM cannon_results WHERE id = ?
+                """,
+                (result_id,),
+            ).fetchone()
+        if not row:
+            raise RaceError("Cannon result not found")
+        return dict(row)
 
     def ingest_event(self, event: dict[str, Any], transport: str) -> dict[str, Any]:
         if transport not in {"usb", "wifi", "emulator-usb", "emulator-wifi"}:
@@ -424,11 +493,33 @@ class RaceStore:
                 ORDER BY received_at DESC LIMIT 1
                 """
             ).fetchone()
+            cannon_leaders = self.connection.execute(
+                """
+                SELECT id, player_name, distance_mm, recorded_at FROM (
+                    SELECT id, player_name, distance_mm, recorded_at,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY lower(player_name)
+                               ORDER BY distance_mm DESC, recorded_at ASC, id ASC
+                           ) AS participant_rank
+                    FROM cannon_results
+                ) WHERE participant_rank = 1
+                ORDER BY distance_mm DESC, recorded_at ASC, id ASC
+                LIMIT 100
+                """
+            ).fetchall()
+            recent_cannon = self.connection.execute(
+                """
+                SELECT id, player_name, distance_mm, recorded_at
+                FROM cannon_results ORDER BY id DESC LIMIT 12
+                """
+            ).fetchall()
         return {
             "active_race": dict(active) if active else None,
             "leaderboard": [dict(row) for row in leaders],
             "recent_races": [dict(row) for row in recent],
             "device": dict(device) if device else None,
+            "cannon_leaderboard": [dict(row) for row in cannon_leaders],
+            "recent_cannon": [dict(row) for row in recent_cannon],
             "server_time": utc_now(),
         }
 
@@ -504,6 +595,14 @@ class RaceRequestHandler(BaseHTTPRequestHandler):
                 race = self.runtime.store.arm_race(str(body.get("player_name", "")))
                 self.runtime.bus.publish()
                 self._send_json({"race": race}, HTTPStatus.CREATED)
+            elif path == "/api/cannon-results":
+                result = self.runtime.store.record_cannon_result(
+                    str(body.get("player_name", "")),
+                    body.get("distance"),
+                    str(body.get("unit", "")),
+                )
+                self.runtime.bus.publish()
+                self._send_json({"result": result}, HTTPStatus.CREATED)
             elif path == "/api/races/cancel":
                 race = self.runtime.store.cancel_active()
                 self.runtime.bus.publish()

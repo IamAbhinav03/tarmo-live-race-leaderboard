@@ -1,6 +1,8 @@
 let currentState = null;
 const form = document.querySelector("#race-form");
 const input = document.querySelector("#player-name");
+const distanceInput = document.querySelector("#shot-distance");
+const distanceUnit = document.querySelector("#distance-unit");
 const armButton = document.querySelector("#arm-button");
 const message = document.querySelector("#form-message");
 const activeContent = document.querySelector("#active-content");
@@ -9,6 +11,7 @@ const logFilter = document.querySelector("#log-filter");
 const pauseLogs = document.querySelector("#pause-logs");
 let auditLogs = [];
 let logsPaused = false;
+let selectedCompetition = "race";
 
 async function post(path, body = {}) {
   const response = await fetch(path, {
@@ -26,12 +29,21 @@ form.addEventListener("submit", async (event) => {
   message.textContent = "";
   armButton.disabled = true;
   try {
-    await post("/api/races", { player_name: input.value });
+    if (selectedCompetition === "race") {
+      await post("/api/races", { player_name: input.value });
+    } else {
+      await post("/api/cannon-results", {
+        player_name: input.value,
+        distance: distanceInput.value,
+        unit: distanceUnit.value,
+      });
+    }
     input.value = "";
+    distanceInput.value = "";
   } catch (error) {
     message.textContent = error.message;
   } finally {
-    armButton.disabled = Boolean(currentState?.active_race);
+    updateFormAvailability();
   }
 });
 
@@ -46,7 +58,42 @@ document.addEventListener("click", async (event) => {
     pauseLogs.textContent = logsPaused ? "Resume" : "Pause";
     pauseLogs.classList.toggle("paused", logsPaused);
   }
+  const competitionButton = event.target.closest("[data-competition]");
+  if (competitionButton) selectCompetition(competitionButton.dataset.competition);
 });
+
+function selectCompetition(competition) {
+  selectedCompetition = competition;
+  document.querySelectorAll("[data-competition]").forEach((button) => {
+    const selected = button.dataset.competition === competition;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
+  });
+  const cannon = competition === "cannon";
+  document.querySelector("#entry-kicker").textContent = cannon ? "Distance registration" : "Driver registration";
+  document.querySelector("#entry-title").textContent = cannon ? "Launch for glory." : "Ready the grid.";
+  document.querySelector("#entry-copy").textContent = cannon
+    ? "Record each measured shot. Every attempt is saved; each participant is ranked by their personal best."
+    : "Register one driver and arm the timing gate. The first validated crossing starts their lap; the next finishes it.";
+  document.querySelector("#player-label").textContent = cannon ? "Participant name" : "Driver name";
+  input.placeholder = cannon ? "Enter participant name" : "Enter player name";
+  document.querySelector("#distance-fields").hidden = !cannon;
+  distanceInput.required = cannon;
+  document.querySelector("#device-card").hidden = cannon;
+  armButton.textContent = cannon ? "Record cannon shot" : "Register & arm race";
+  document.querySelector("#recent-heading").textContent = cannon ? "Recent shots" : "Recent runs";
+  message.textContent = "";
+  updateFormAvailability();
+  if (currentState) renderCompetition(currentState);
+}
+
+function updateFormAvailability() {
+  const raceBlocked = selectedCompetition === "race" && Boolean(currentState?.active_race);
+  armButton.disabled = raceBlocked;
+  input.disabled = raceBlocked;
+  distanceInput.disabled = selectedCompetition !== "cannon";
+  distanceUnit.disabled = selectedCompetition !== "cannon";
+}
 
 logFilter.addEventListener("change", renderLogs);
 
@@ -101,9 +148,29 @@ function render(state) {
   currentState = state;
   document.querySelector("#server-dot").classList.add("live");
   document.querySelector("#server-status").textContent = "Server live";
+  updateFormAvailability();
+  renderCompetition(state);
+
+  const device = state.device;
+  document.querySelector("#device-name").textContent = device ? `${device.device_id} · ${device.transport}` : "Not seen yet";
+  document.querySelector("#device-last").textContent = device ? Tarmo.shortDate(device.received_at) : "—";
+}
+
+function renderCompetition(state) {
   const active = state.active_race;
-  armButton.disabled = Boolean(active);
-  input.disabled = Boolean(active);
+  if (selectedCompetition === "cannon") {
+    const leader = state.cannon_leaderboard?.[0];
+    activeContent.innerHTML = leader
+      ? `<div class="active-status">Cannon Clash leader</div><div class="active-name">${Tarmo.escapeHtml(leader.player_name)}</div><div class="active-clock">${Tarmo.formatDistance(leader.distance_mm)}</div><div class="active-hint">${Tarmo.formatFeet(leader.distance_mm)} · personal-best ranking</div>`
+      : '<div class="active-status">Range clear</div><div class="active-name">No shots recorded</div><div class="active-hint">Measure the first launch and enter its distance.</div>';
+    const recent = state.recent_cannon || [];
+    document.querySelector("#recent-list").innerHTML = recent.length ? recent.map((shot) => `
+      <div class="recent-row">
+        <div><div class="recent-name">${Tarmo.escapeHtml(shot.player_name)}</div><div class="recent-meta">Cannon Clash · ${Tarmo.shortDate(shot.recorded_at)}</div></div>
+        <div class="recent-value">${Tarmo.formatDistance(shot.distance_mm)}<br><span>${Tarmo.formatFeet(shot.distance_mm)}</span></div>
+      </div>`).join("") : '<div class="empty">No cannon shots recorded yet.</div>';
+    return;
+  }
 
   if (!active) {
     activeContent.innerHTML = '<div class="active-status">Grid open</div><div class="active-name">No active race</div><div class="active-hint">Register the next driver to arm the timing gate.</div>';
@@ -112,10 +179,6 @@ function render(state) {
   } else {
     activeContent.innerHTML = `<div class="active-status">Lap in progress</div><div class="active-name">${Tarmo.escapeHtml(active.player_name)}</div><div class="active-clock" id="operator-clock">00:00.000</div><div class="active-hint">The next validated crossing records the official time.</div><div class="button-row" style="justify-content:center"><button class="secondary danger" id="cancel-race">Cancel race</button></div>`;
   }
-
-  const device = state.device;
-  document.querySelector("#device-name").textContent = device ? `${device.device_id} · ${device.transport}` : "Not seen yet";
-  document.querySelector("#device-last").textContent = device ? Tarmo.shortDate(device.received_at) : "—";
 
   const recent = state.recent_races;
   document.querySelector("#recent-list").innerHTML = recent.length ? recent.map((race) => `

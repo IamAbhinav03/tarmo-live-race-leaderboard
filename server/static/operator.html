@@ -19,18 +19,38 @@
 
   <main class="shell operator-layout">
     <section class="panel">
-      <div class="panel-kicker">Driver registration</div>
-      <h1>Ready the grid.</h1>
-      <p>Register one driver and arm the timing gate. The first validated crossing starts their lap; the next finishes it.</p>
+      <div class="competition-switch" role="tablist" aria-label="Competition">
+        <button type="button" class="competition-option active" data-competition="race" role="tab" aria-selected="true">Tarmo Live</button>
+        <button type="button" class="competition-option" data-competition="cannon" role="tab" aria-selected="false">Cannon Clash</button>
+      </div>
+      <div class="panel-kicker" id="entry-kicker">Driver registration</div>
+      <h1 id="entry-title">Ready the grid.</h1>
+      <p id="entry-copy">Register one driver and arm the timing gate. The first validated crossing starts their lap; the next finishes it.</p>
       <form id="race-form">
-        <label for="player-name">Driver name</label>
+        <label for="player-name" id="player-label">Driver name</label>
         <input id="player-name" name="player_name" maxlength="80" autocomplete="off" placeholder="Enter player name" required>
+        <div class="distance-fields" id="distance-fields" hidden>
+          <div>
+            <label for="shot-distance">Measured distance</label>
+            <input id="shot-distance" name="distance" type="number" min="0.01" step="any" inputmode="decimal" placeholder="Enter distance">
+          </div>
+          <div>
+            <label for="distance-unit">Unit</label>
+            <select id="distance-unit" name="unit">
+              <option value="m">Metres</option>
+              <option value="cm">Centimetres</option>
+              <option value="ft">Feet</option>
+              <option value="in">Inches</option>
+              <option value="mm">Millimetres</option>
+            </select>
+          </div>
+        </div>
         <div class="button-row">
           <button type="submit" id="arm-button">Register &amp; arm race</button>
         </div>
         <div class="form-message" id="form-message" role="alert"></div>
       </form>
-      <div class="device-card">
+      <div class="device-card" id="device-card">
         <div><div class="device-label">Timing gate</div><div class="device-value" id="device-name">Not seen yet</div></div>
         <div><div class="device-label">Last signal</div><div class="device-value" id="device-last">—</div></div>
       </div>
@@ -40,7 +60,7 @@
       <div class="panel active-card" id="active-card" aria-live="polite">
         <div class="active-content" id="active-content"></div>
       </div>
-      <div class="mini-head"><h2>Recent runs</h2><span class="status-chip"><span class="status-dot" id="server-dot"></span><span id="server-status">Connecting</span></span></div>
+      <div class="mini-head"><h2 id="recent-heading">Recent runs</h2><span class="status-chip"><span class="status-dot" id="server-dot"></span><span id="server-status">Connecting</span></span></div>
       <div id="recent-list"></div>
     </section>
 
