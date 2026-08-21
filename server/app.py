@@ -510,7 +510,8 @@ class RaceRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"race": race})
             elif path == "/api/device/events":
                 result = self.runtime.store.ingest_event(body, "wifi")
-                self.runtime.bus.publish()
+                if result.get("race_changed"):
+                    self.runtime.bus.publish()
                 self._send_json(result)
             elif path == "/api/emulator/events":
                 if not self.runtime.emulator_enabled:
@@ -528,7 +529,8 @@ class RaceRequestHandler(BaseHTTPRequestHandler):
                 result = self.runtime.store.ingest_event(
                     event, f"emulator-{requested_transport}",
                 )
-                self.runtime.bus.publish()
+                if result.get("race_changed"):
+                    self.runtime.bus.publish()
                 self._send_json(result)
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
@@ -538,7 +540,6 @@ class RaceRequestHandler(BaseHTTPRequestHandler):
                 transport="wifi" if path == "/api/device/events" else None,
                 details={"path": path, "client": self.client_address[0]},
             )
-            self.runtime.bus.publish()
             self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:  # pragma: no cover - defensive server boundary
             print(f"Request failed: {exc}", file=sys.stderr)
@@ -640,7 +641,6 @@ class SerialBridge(threading.Thread):
                     f"USB bridge connected to {port}", transport="usb",
                     details={"port": port, "baud": self.baud},
                 )
-                self.runtime.bus.publish()
                 self._read_port(port)
             except (OSError, termios.error) as exc:
                 print(f"USB bridge disconnected from {port}: {exc}", file=sys.stderr)
@@ -649,7 +649,6 @@ class SerialBridge(threading.Thread):
                     f"USB bridge disconnected from {port}", transport="usb",
                     details={"port": port, "error": str(exc)},
                 )
-                self.runtime.bus.publish()
                 self.stop_event.wait(1.0)
 
     def _find_port(self) -> str | None:
@@ -692,7 +691,6 @@ class SerialBridge(threading.Thread):
                         "Discarded an unterminated USB serial line larger than 16 KiB",
                         transport="usb", details={"bytes_discarded": len(buffer)},
                     )
-                    self.runtime.bus.publish()
                     buffer.clear()
         finally:
             os.close(descriptor)
@@ -706,12 +704,12 @@ class SerialBridge(threading.Thread):
                 self.runtime.store.record_log(
                     level, "firmware", "firmware_console", message, transport="usb",
                 )
-                self.runtime.bus.publish()
             return
         try:
             event = json.loads(raw_line)
             result = self.runtime.store.ingest_event(event, "usb")
-            self.runtime.bus.publish()
+            if result.get("race_changed"):
+                self.runtime.bus.publish()
         except (json.JSONDecodeError, RaceError) as exc:
             print(f"Ignored invalid USB event: {exc}", file=sys.stderr)
             self.runtime.store.record_log(
@@ -719,7 +717,6 @@ class SerialBridge(threading.Thread):
                 f"Ignored invalid USB event: {exc}", transport="usb",
                 details={"payload_preview": raw_line.decode("utf-8", errors="replace")[:500]},
             )
-            self.runtime.bus.publish()
 
 
 def load_config(config_path: Path) -> dict[str, Any]:

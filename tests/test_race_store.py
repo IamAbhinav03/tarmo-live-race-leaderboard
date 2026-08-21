@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import unittest
@@ -7,7 +8,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "server"))
 
-from app import RaceError, RaceStore  # noqa: E402
+from app import EventBus, RaceError, RaceStore, Runtime, SerialBridge  # noqa: E402
 
 
 def crossing(sequence: int, device_time_us: int, boot_id: str = "abc123"):
@@ -147,6 +148,39 @@ class RaceStoreTests(unittest.TestCase):
             self.assertEqual(second.logs()[0]["code"], "persistent")
         finally:
             second.close()
+
+    def test_sensor_logs_do_not_publish_race_state(self):
+        bus = EventBus()
+        bridge = SerialBridge(Runtime(store=self.store, bus=bus), None, 115200)
+        sensor_log = {
+            **crossing(20, 20_000_000),
+            "type": "log",
+            "level": "info",
+            "code": "sensor_activated",
+            "message": "Sensor A entered detection range",
+            "sensor": "A",
+            "distance_mm": 175,
+            "range_status": 0,
+        }
+        bridge._handle_line(json.dumps(sensor_log).encode())
+        bridge._handle_line(b"DIAG random sensor noise")
+        self.assertEqual(bus.version, 0)
+        self.assertEqual(self.store.logs()[0]["code"], "firmware_console")
+
+    def test_crossing_publishes_only_when_race_changes(self):
+        bus = EventBus()
+        bridge = SerialBridge(Runtime(store=self.store, bus=bus), None, 115200)
+        ignored = crossing(30, 30_000_000)
+        bridge._handle_line(json.dumps(ignored).encode())
+        self.assertEqual(bus.version, 0)
+
+        self.store.arm_race("Broadcast")
+        start = crossing(31, 31_000_000)
+        encoded = json.dumps(start).encode()
+        bridge._handle_line(encoded)
+        self.assertEqual(bus.version, 1)
+        bridge._handle_line(encoded)
+        self.assertEqual(bus.version, 1)
 
 
 if __name__ == "__main__":

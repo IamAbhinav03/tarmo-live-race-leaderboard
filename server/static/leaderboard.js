@@ -1,11 +1,18 @@
 let currentState = null;
 let previousLeader = null;
+let previousLeaderboardSignature = null;
 
 const raceStrip = document.querySelector("#race-strip");
 const raceLabel = document.querySelector("#race-label");
 const raceName = document.querySelector("#race-name");
 const liveTime = document.querySelector("#live-time");
 const leaderGrid = document.querySelector("#leader-grid");
+
+function classificationSignature(entries) {
+  return JSON.stringify(entries.map((entry) => [
+    entry.id, entry.player_name, entry.elapsed_us, entry.finished_at,
+  ]));
+}
 
 function render(state) {
   currentState = state;
@@ -28,8 +35,13 @@ function render(state) {
     raceName.textContent = active.player_name;
   }
 
+  const signature = classificationSignature(state.leaderboard);
+  if (signature === previousLeaderboardSignature) return;
+  previousLeaderboardSignature = signature;
+
   if (!state.leaderboard.length) {
     leaderGrid.innerHTML = '<div class="empty">No classified drivers yet. The first completed lap sets the benchmark.</div>';
+    previousLeader = null;
     return;
   }
 

@@ -136,7 +136,10 @@ Two-sensor agreement substantially reduces false triggers, but physical placemen
 
 ```bash
 python3 -m unittest discover -s tests -v
+node tests/test_leaderboard.cjs
 ```
+
+The leaderboard regression test verifies that sensor telemetry, duplicate deliveries, and unchanged state envelopes do not rebuild or reanimate classification rows. Only a genuine change to the ordered completed-race data may replace those rows.
 
 ### Breadboard test sequence
 
