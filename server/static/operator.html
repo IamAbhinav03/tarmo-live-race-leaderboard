@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#080a0d">
-  <title>Race Control — Tarmo Live</title>
+  <title>Competition Control — Tarmo Live &amp; Cannon Clash</title>
   <meta name="description" content="Operator race registration and timing control.">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
+<body class="operator-page">
   <header class="shell topbar">
-    <a class="brand" href="/operator" aria-label="Tarmo Live race control">
-      <span class="brand-mark">T</span>
-      <span class="brand-copy">Race Control<small>Tarmo Live</small></span>
+    <a class="brand" href="/operator" aria-label="Competition operator console">
+      <span class="brand-mark" id="operator-brand-mark">R</span>
+      <span class="brand-copy"><span id="operator-brand-name">Race Control</span><small>Competition system</small></span>
     </a>
     <a class="nav-link" href="/leaderboard" target="_blank" rel="noopener">Open leaderboard ↗</a>
   </header>
@@ -60,8 +60,31 @@
       <div class="panel active-card" id="active-card" aria-live="polite">
         <div class="active-content" id="active-content"></div>
       </div>
-      <div class="mini-head"><h2 id="recent-heading">Recent runs</h2><span class="status-chip"><span class="status-dot" id="server-dot"></span><span id="server-status">Connecting</span></span></div>
-      <div id="recent-list"></div>
+    </section>
+
+    <section class="panel sensor-monitor" aria-labelledby="sensor-monitor-title">
+      <div class="sensor-monitor-head">
+        <div>
+          <div class="panel-kicker">Live USB ranging</div>
+          <h2 id="sensor-monitor-title">Sensor gate</h2>
+        </div>
+        <div class="monitor-chips">
+          <span class="status-chip" id="gate-chip">Gate waiting</span>
+          <span class="status-chip"><span class="status-dot" id="server-dot"></span><span id="server-status">Connecting</span></span>
+        </div>
+      </div>
+      <div class="sensor-live-list" aria-live="polite">
+        <article class="sensor-live-row" id="sensor-a-row">
+          <span class="sensor-channel">A</span>
+          <div class="sensor-reading"><strong id="sensor-a-distance">—</strong><small id="sensor-a-meta">Waiting for USB telemetry</small></div>
+          <span class="sensor-state" id="sensor-a-state">Waiting</span>
+        </article>
+        <article class="sensor-live-row" id="sensor-b-row">
+          <span class="sensor-channel">B</span>
+          <div class="sensor-reading"><strong id="sensor-b-distance">—</strong><small id="sensor-b-meta">Waiting for USB telemetry</small></div>
+          <span class="sensor-state" id="sensor-b-state">Waiting</span>
+        </article>
+      </div>
     </section>
 
     <section class="panel log-panel" aria-labelledby="log-title">
@@ -88,6 +111,11 @@
       <div class="log-list" id="log-list" aria-live="polite">
         <div class="empty">Waiting for telemetry…</div>
       </div>
+    </section>
+
+    <section class="panel recent-panel" aria-labelledby="recent-heading">
+      <div class="mini-head"><h2 id="recent-heading">Recent runs</h2></div>
+      <div id="recent-list"></div>
     </section>
   </main>
 

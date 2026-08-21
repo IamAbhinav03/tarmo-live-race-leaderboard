@@ -75,15 +75,15 @@ const base = {
 };
 
 render({ ...base, server_time: "first telemetry update" });
-assert.equal(rowWrites, 1, "initial classification should render once");
-assert.equal(cannonWrites, 1, "initial cannon classification should render once");
+assert.equal(rowWrites, 1, "initial race leaderboard should render once");
+assert.equal(cannonWrites, 1, "initial cannon leaderboard should render once");
 
 render({ ...base, server_time: "sensor noise changed server state envelope" });
-assert.equal(rowWrites, 1, "unchanged classification must not rebuild rows");
-assert.equal(cannonWrites, 1, "unchanged cannon classification must not rebuild rows");
+assert.equal(rowWrites, 1, "unchanged race leaderboard must not rebuild rows");
+assert.equal(cannonWrites, 1, "unchanged cannon leaderboard must not rebuild rows");
 
 render({ ...base, active_race: { status: "armed", player_name: "Next Driver" } });
-assert.equal(rowWrites, 1, "arming a race must not rebuild existing classification rows");
+assert.equal(rowWrites, 1, "arming a race must not rebuild existing leaderboard rows");
 
 render({
   ...base,
@@ -94,7 +94,7 @@ render({
     finished_at: "2026-08-21T00:01:00.000Z",
   }],
 });
-assert.equal(rowWrites, 2, "a genuine classification change must rebuild rows");
+assert.equal(rowWrites, 2, "a genuine race leaderboard change must rebuild rows");
 
 render({
   ...base,
@@ -105,6 +105,6 @@ render({
     recorded_at: "2026-08-21T00:03:00.000Z",
   }],
 });
-assert.equal(cannonWrites, 2, "a genuine cannon classification change must rebuild its rows");
+assert.equal(cannonWrites, 2, "a genuine cannon leaderboard change must rebuild its rows");
 
 console.log("leaderboard render guard passed");

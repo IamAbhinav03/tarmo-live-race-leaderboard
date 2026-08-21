@@ -167,6 +167,31 @@ class RaceStoreTests(unittest.TestCase):
         self.assertEqual(bus.version, 0)
         self.assertEqual(self.store.logs()[0]["code"], "firmware_console")
 
+    def test_live_sensor_status_is_in_memory_and_not_audit_logged(self):
+        runtime = Runtime(store=self.store, bus=EventBus())
+        bridge = SerialBridge(runtime, None, 115200)
+        before = len(self.store.logs())
+        bridge._handle_line(json.dumps({
+            "type": "sensor_status",
+            "device_id": "gate",
+            "boot_id": "boot-a",
+            "device_time_us": 123456,
+            "a_mm": 418,
+            "a_status": 0,
+            "a_near": 1,
+            "a_candidate": 1,
+            "b_mm": 8191,
+            "b_status": 4,
+            "b_near": 0,
+            "b_candidate": 0,
+            "gate_locked": 0,
+        }).encode())
+        snapshot = runtime.sensor_snapshot()
+        self.assertEqual(snapshot["sensor_a"]["distance_mm"], 418)
+        self.assertTrue(snapshot["sensor_a"]["near"])
+        self.assertFalse(snapshot["sensor_b"]["near"])
+        self.assertEqual(len(self.store.logs()), before)
+
     def test_crossing_publishes_only_when_race_changes(self):
         bus = EventBus()
         bridge = SerialBridge(Runtime(store=self.store, bus=bus), None, 115200)

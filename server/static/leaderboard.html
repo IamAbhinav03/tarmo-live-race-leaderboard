@@ -4,15 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#080a0d">
-  <title>Tarmo Live — Competition Leaderboards</title>
-  <meta name="description" content="Live Tarmo race and Cannon Clash leaderboards.">
+  <title>Tarmo Live &amp; Cannon Clash — Live Leaderboards</title>
+  <meta name="description" content="Live Tarmo Live race and Cannon Clash leaderboards.">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body class="leaderboard-page view-both">
   <header class="shell topbar">
-    <a class="brand" href="/leaderboard" aria-label="Tarmo competition leaderboards">
-      <span class="brand-mark">T</span>
-      <span class="brand-copy">Tarmo Live<small>Competition control system</small></span>
+    <a class="brand" href="/leaderboard" aria-label="Competition leaderboards">
+      <span class="brand-mark" id="display-brand-mark">T</span>
+      <span class="brand-copy"><span id="display-brand-name">Tarmo Live</span><small>Competition control system</small></span>
     </a>
     <div class="display-actions">
       <div class="view-switch" role="group" aria-label="Leaderboard layout">
@@ -39,7 +39,7 @@
           </div>
           <div class="live-time" id="live-time">--:--.---</div>
         </section>
-        <div class="board-list-title"><h2>Race classification</h2><span>Official lap time</span></div>
+        <div class="board-list-title"><h2>Race leaderboard</h2><span>Official lap time</span></div>
         <div class="leader-grid" id="leader-grid"></div>
       </section>
 
@@ -55,7 +55,7 @@
           </div>
           <div class="cannon-distance" id="cannon-leading-distance">--.-- m</div>
         </section>
-        <div class="board-list-title"><h2>Distance classification</h2><span>Personal best attempts</span></div>
+        <div class="board-list-title"><h2>Distance leaderboard</h2><span>Personal best attempts</span></div>
         <div class="leader-grid cannon-grid" id="cannon-grid"></div>
       </section>
     </div>

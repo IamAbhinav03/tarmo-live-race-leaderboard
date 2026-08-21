@@ -12,6 +12,10 @@ const pauseLogs = document.querySelector("#pause-logs");
 let auditLogs = [];
 let logsPaused = false;
 let selectedCompetition = "race";
+const sensorRows = {
+  sensor_a: document.querySelector("#sensor-a-row"),
+  sensor_b: document.querySelector("#sensor-b-row"),
+};
 
 async function post(path, body = {}) {
   const response = await fetch(path, {
@@ -70,6 +74,9 @@ function selectCompetition(competition) {
     button.setAttribute("aria-selected", String(selected));
   });
   const cannon = competition === "cannon";
+  document.body.classList.toggle("operator-cannon", cannon);
+  document.querySelector("#operator-brand-mark").textContent = cannon ? "C" : "R";
+  document.querySelector("#operator-brand-name").textContent = cannon ? "Cannon Control" : "Race Control";
   document.querySelector("#entry-kicker").textContent = cannon ? "Distance registration" : "Driver registration";
   document.querySelector("#entry-title").textContent = cannon ? "Launch for glory." : "Ready the grid.";
   document.querySelector("#entry-copy").textContent = cannon
@@ -140,6 +147,47 @@ async function refreshLogs() {
   }
 }
 
+function renderSensor(channel, sensor, receivedAt) {
+  const suffix = channel === "sensor_a" ? "a" : "b";
+  const row = sensorRows[channel];
+  const stale = !receivedAt || Date.now() - new Date(receivedAt).getTime() > 1500;
+  const detected = Boolean(sensor?.near) && !stale;
+  const candidate = Boolean(sensor?.candidate) && !detected && !stale;
+  row.classList.toggle("detected", detected);
+  row.classList.toggle("candidate", candidate);
+  row.classList.toggle("stale", stale);
+
+  const distance = Number(sensor?.distance_mm);
+  const validDistance = Number.isFinite(distance) && distance < 8000;
+  document.querySelector(`#sensor-${suffix}-distance`).textContent = validDistance
+    ? `${distance} mm`
+    : "Out of range";
+  document.querySelector(`#sensor-${suffix}-state`).textContent = stale
+    ? "Stale"
+    : detected ? "Detected" : candidate ? "Candidate" : "Clear";
+  document.querySelector(`#sensor-${suffix}-meta`).textContent = sensor
+    ? `Range status ${sensor.range_status} · ${sensor.near ? "stable-near" : "stable-clear"} · raw ${distance} mm`
+    : "Waiting for USB telemetry";
+}
+
+function renderSensors(snapshot) {
+  renderSensor("sensor_a", snapshot?.sensor_a, snapshot?.received_at);
+  renderSensor("sensor_b", snapshot?.sensor_b, snapshot?.received_at);
+  const gateChip = document.querySelector("#gate-chip");
+  gateChip.textContent = snapshot?.gate_locked ? "Gate locked" : snapshot ? "Gate ready" : "Gate waiting";
+  gateChip.classList.toggle("live", Boolean(snapshot) && !snapshot.gate_locked);
+}
+
+async function refreshSensors() {
+  try {
+    const response = await fetch("/api/sensors", { cache: "no-store" });
+    if (!response.ok) throw new Error("Sensor request failed");
+    renderSensors((await response.json()).sensors);
+  } catch (_error) {
+    renderSensors(null);
+  }
+}
+
 function statusLabel(status) {
   return ({ complete: "Classified", cancelled: "Cancelled", error: "Timing error", armed: "Armed", running: "On track" })[status] || status;
 }
@@ -201,3 +249,5 @@ Tarmo.connect(render);
 requestAnimationFrame(tick);
 refreshLogs();
 setInterval(refreshLogs, 1000);
+refreshSensors();
+setInterval(refreshSensors, 250);

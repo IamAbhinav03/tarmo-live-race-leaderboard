@@ -29,6 +29,8 @@ constexpr size_t kJsonSize = 384;
 Adafruit_VL53L0X sensorA;
 Adafruit_VL53L0X sensorB;
 
+enum class RangingSensor : uint8_t { A, B };
+
 struct SensorState {
   uint16_t distanceMm = 8190;
   uint8_t rangeStatus = 0;
@@ -55,9 +57,12 @@ uint8_t queueCount = 0;
 uint32_t bootId = 0;
 uint32_t eventSequence = 0;
 uint32_t lastWifiAttemptMs = 0;
+uint32_t lastTelemetryMs = 0;
 uint32_t crossingLockedAtMs = 0;
 bool crossingLocked = false;
 bool wifiConnectionReported = false;
+bool rangeInProgress = false;
+RangingSensor rangingSensor = RangingSensor::A;
 int lastWifiDeliveryStatus = 0;
 
 bool elapsedAtLeast(uint32_t now, uint32_t then, uint32_t interval) {
@@ -99,7 +104,9 @@ void emitFirmwareLog(const char *level, const char *code, const char *message,
 }
 
 bool isValidNearReading(uint16_t distanceMm, uint8_t rangeStatus) {
-  return rangeStatus != 4 && distanceMm >= DETECTION_MIN_MM && distanceMm <= DETECTION_MAX_MM;
+  // The ST/Adafruit API defines only status 0 as a valid range. In particular,
+  // status 2 is a signal failure and must never become a detection candidate.
+  return rangeStatus == 0 && distanceMm >= DETECTION_MIN_MM && distanceMm <= DETECTION_MAX_MM;
 }
 
 void updateSensorState(SensorState &state, uint16_t distanceMm, uint8_t rangeStatus, uint32_t nowMs) {
@@ -241,6 +248,13 @@ bool initializeSensors() {
 #endif
   sensorA.setMeasurementTimingBudgetMicroSeconds(SENSOR_TIMING_BUDGET_US);
   sensorB.setMeasurementTimingBudgetMicroSeconds(SENSOR_TIMING_BUDGET_US);
+  rangingSensor = RangingSensor::A;
+  rangeInProgress = sensorA.startRange();
+  if (!rangeInProgress) {
+    emitFirmwareLog("error", "sensor_range_start_failed",
+                    "Sensor A failed to start staggered ranging", "A");
+    return false;
+  }
   emitFirmwareLog("info", "sensors_ready", "Both VL53L0X sensors initialized");
   return true;
 }
@@ -322,29 +336,57 @@ void deliverPendingWifi(uint32_t nowMs) {
   }
 }
 
-void readSensors(uint32_t nowMs) {
-  VL53L0X_RangingMeasurementData_t measurementA;
-  VL53L0X_RangingMeasurementData_t measurementB;
-  sensorA.rangingTest(&measurementA, false);
-  sensorB.rangingTest(&measurementB, false);
-  const bool wasNearA = stateA.near;
-  const bool wasNearB = stateB.near;
-  updateSensorState(stateA, measurementA.RangeMilliMeter, measurementA.RangeStatus, nowMs);
-  updateSensorState(stateB, measurementB.RangeMilliMeter, measurementB.RangeStatus, nowMs);
-  if (!wasNearA && stateA.near) {
-    emitFirmwareLog("info", "sensor_activated", "Sensor A entered detection range", "A",
-                    measurementA.RangeMilliMeter, measurementA.RangeStatus);
-  } else if (wasNearA && !stateA.near) {
-    emitFirmwareLog("info", "sensor_cleared", "Sensor A cleared", "A",
-                    measurementA.RangeMilliMeter, measurementA.RangeStatus);
+void processCompletedReading(Adafruit_VL53L0X &sensor, SensorState &state,
+                             const char *sensorName, const char *activatedMessage,
+                             const char *clearedMessage) {
+  const uint16_t distanceMm = sensor.readRangeResult();
+  const uint8_t rangeStatus = sensor.readRangeStatus();
+  const bool wasNear = state.near;
+  updateSensorState(state, distanceMm, rangeStatus, millis());
+  if (!wasNear && state.near) {
+    emitFirmwareLog("info", "sensor_activated", activatedMessage, sensorName,
+                    distanceMm, rangeStatus);
+  } else if (wasNear && !state.near) {
+    emitFirmwareLog("info", "sensor_cleared", clearedMessage, sensorName,
+                    distanceMm, rangeStatus);
   }
-  if (!wasNearB && stateB.near) {
-    emitFirmwareLog("info", "sensor_activated", "Sensor B entered detection range", "B",
-                    measurementB.RangeMilliMeter, measurementB.RangeStatus);
-  } else if (wasNearB && !stateB.near) {
-    emitFirmwareLog("info", "sensor_cleared", "Sensor B cleared", "B",
-                    measurementB.RangeMilliMeter, measurementB.RangeStatus);
+}
+
+void readSensors() {
+  // Alternate non-blocking single shots. Only one laser emits at a time, which
+  // prevents the side-by-side VL53L0X modules from optically interfering.
+  Adafruit_VL53L0X &activeSensor = rangingSensor == RangingSensor::A ? sensorA : sensorB;
+  if (rangeInProgress && !activeSensor.isRangeComplete()) {
+    return;
   }
+  if (rangeInProgress) {
+    if (rangingSensor == RangingSensor::A) {
+      processCompletedReading(sensorA, stateA, "A", "Sensor A entered detection range",
+                              "Sensor A cleared");
+      rangingSensor = RangingSensor::B;
+    } else {
+      processCompletedReading(sensorB, stateB, "B", "Sensor B entered detection range",
+                              "Sensor B cleared");
+      rangingSensor = RangingSensor::A;
+    }
+    rangeInProgress = false;
+  }
+
+  Adafruit_VL53L0X &nextSensor = rangingSensor == RangingSensor::A ? sensorA : sensorB;
+  rangeInProgress = nextSensor.startRange();
+}
+
+void emitSensorStatus() {
+  Serial.printf(
+      "{\"type\":\"sensor_status\",\"device_id\":\"%s\",\"boot_id\":\"%08lx\","
+      "\"device_time_us\":%lld,\"a_mm\":%u,\"a_status\":%u,\"a_near\":%u,"
+      "\"a_candidate\":%u,\"b_mm\":%u,\"b_status\":%u,\"b_near\":%u,"
+      "\"b_candidate\":%u,\"gate_locked\":%u}\n",
+      DEVICE_ID, static_cast<unsigned long>(bootId),
+      static_cast<long long>(esp_timer_get_time()), stateA.distanceMm,
+      stateA.rangeStatus, stateA.near ? 1 : 0, stateA.detectionSeen ? 1 : 0,
+      stateB.distanceMm, stateB.rangeStatus, stateB.near ? 1 : 0,
+      stateB.detectionSeen ? 1 : 0, crossingLocked ? 1 : 0);
 }
 
 }  // namespace
@@ -356,7 +398,7 @@ void setup() {
   emitFirmwareLog("info", "device_boot", "Tarmo timing gate booted");
 
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-  Wire.setClock(400000);
+  Wire.setClock(I2C_CLOCK_HZ);
   if (!initializeSensors()) {
     emitFirmwareLog("error", "sensor_initialization_halted",
                     "Sensor initialization halted; check power, XSHUT, and I2C wiring");
@@ -370,9 +412,15 @@ void setup() {
 }
 
 void loop() {
+  readSensors();
+  // Capture time after polling: a completed asynchronous measurement may have
+  // set detectedAtMs during readSensors(), and nowMs must not predate it.
   const uint32_t nowMs = millis();
-  readSensors(nowMs);
   updateCrossingDetector(nowMs);
+  if (elapsedAtLeast(nowMs, lastTelemetryMs, SENSOR_TELEMETRY_INTERVAL_MS)) {
+    lastTelemetryMs = nowMs;
+    emitSensorStatus();
+  }
   maintainWifi(nowMs);
   deliverPendingWifi(nowMs);
   delay(1);

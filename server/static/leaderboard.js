@@ -12,12 +12,19 @@ const liveTime = document.querySelector("#live-time");
 const leaderGrid = document.querySelector("#leader-grid");
 const cannonGrid = document.querySelector("#cannon-grid");
 
-function classificationSignature(entries, fields) {
+function leaderboardSignature(entries, fields) {
   return JSON.stringify(entries.map((entry) => fields.map((field) => entry[field])));
 }
 
 function setView(view) {
   selectedView = ["both", "race", "cannon"].includes(view) ? view : "both";
+  const brands = {
+    both: { mark: "T", name: "Tarmo Live" },
+    race: { mark: "T", name: "Tarmo Live" },
+    cannon: { mark: "C", name: "Cannon Clash" },
+  };
+  document.querySelector("#display-brand-mark").textContent = brands[selectedView].mark;
+  document.querySelector("#display-brand-name").textContent = brands[selectedView].name;
   document.body.classList.remove("view-both", "view-race", "view-cannon");
   document.body.classList.add(`view-${selectedView}`);
   document.querySelectorAll("[data-view]").forEach((button) => {
@@ -48,7 +55,7 @@ function renderRace(state) {
     raceName.textContent = active.player_name;
   }
 
-  const signature = classificationSignature(races, ["id", "player_name", "elapsed_us", "finished_at"]);
+  const signature = leaderboardSignature(races, ["id", "player_name", "elapsed_us", "finished_at"]);
   if (signature === previousRaceSignature) return;
   previousRaceSignature = signature;
   if (!races.length) {
@@ -76,7 +83,7 @@ function renderCannon(state) {
   document.querySelector("#cannon-leader-name").textContent = leader ? leader.player_name : "Waiting for first launch";
   document.querySelector("#cannon-leading-distance").textContent = leader ? Tarmo.formatDistance(leader.distance_mm) : "--.-- m";
 
-  const signature = classificationSignature(shots, ["id", "player_name", "distance_mm", "recorded_at"]);
+  const signature = leaderboardSignature(shots, ["id", "player_name", "distance_mm", "recorded_at"]);
   if (signature === previousCannonSignature) return;
   previousCannonSignature = signature;
   if (!shots.length) {

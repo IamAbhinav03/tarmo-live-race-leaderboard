@@ -12,7 +12,7 @@ import sys
 import termios
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from datetime import datetime, timezone
 from http import HTTPStatus
@@ -546,6 +546,43 @@ class Runtime:
     store: RaceStore
     bus: EventBus
     emulator_enabled: bool = False
+    sensor_lock: threading.Lock = field(default_factory=threading.Lock)
+    sensor_status: dict[str, Any] | None = None
+
+    def update_sensor_status(self, event: dict[str, Any]) -> None:
+        try:
+            status = {
+                "device_id": str(event.get("device_id", ""))[:96],
+                "boot_id": str(event.get("boot_id", ""))[:96],
+                "device_time_us": int(event["device_time_us"]),
+                "received_at": utc_now(),
+                "gate_locked": bool(int(event.get("gate_locked", 0))),
+                "sensor_a": {
+                    "distance_mm": int(event["a_mm"]),
+                    "range_status": int(event["a_status"]),
+                    "near": bool(int(event.get("a_near", 0))),
+                    "candidate": bool(int(event.get("a_candidate", 0))),
+                },
+                "sensor_b": {
+                    "distance_mm": int(event["b_mm"]),
+                    "range_status": int(event["b_status"]),
+                    "near": bool(int(event.get("b_near", 0))),
+                    "candidate": bool(int(event.get("b_candidate", 0))),
+                },
+            }
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RaceError("Invalid live sensor status payload") from exc
+        for sensor in (status["sensor_a"], status["sensor_b"]):
+            if not 0 <= sensor["distance_mm"] <= 65_535:
+                raise RaceError("Live sensor distance is outside uint16 range")
+            if not 0 <= sensor["range_status"] <= 255:
+                raise RaceError("Live sensor range status is outside uint8 range")
+        with self.sensor_lock:
+            self.sensor_status = status
+
+    def sensor_snapshot(self) -> dict[str, Any] | None:
+        with self.sensor_lock:
+            return dict(self.sensor_status) if self.sensor_status else None
 
 
 class RaceRequestHandler(BaseHTTPRequestHandler):
@@ -576,6 +613,8 @@ class RaceRequestHandler(BaseHTTPRequestHandler):
                 )
             else:
                 self._send_json({"logs": self.runtime.store.logs(limit, before_id)})
+        elif path == "/api/sensors":
+            self._send_json({"sensors": self.runtime.sensor_snapshot()})
         elif path == "/health":
             self._send_json({"ok": True})
         elif path == "/operator":
@@ -707,6 +746,11 @@ class RaceRequestHandler(BaseHTTPRequestHandler):
             pass
 
     def log_message(self, format_string: str, *args: Any) -> None:
+        request_line = str(args[0]) if args else ""
+        if any(request_line.startswith(path) for path in (
+            "GET /api/sensors", "GET /api/logs", "GET /api/events",
+        )):
+            return
         print(f"{self.address_string()} - {format_string % args}")
 
 
@@ -806,6 +850,9 @@ class SerialBridge(threading.Thread):
             return
         try:
             event = json.loads(raw_line)
+            if event.get("type") == "sensor_status":
+                self.runtime.update_sensor_status(event)
+                return
             result = self.runtime.store.ingest_event(event, "usb")
             if result.get("race_changed"):
                 self.runtime.bus.publish()

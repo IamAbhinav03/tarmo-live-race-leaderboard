@@ -1,6 +1,6 @@
-# Tarmo Competition Leaderboards
+# Tarmo Live Competition System
 
-A local competition system with two live classifications: the sensor-timed **Tarmo Live** race and the manually measured **Tarmo Cannon Clash**. Two VL53L0X sensors must agree on a race crossing before the ESP32-C3 emits an event. Every event is sent over Wi-Fi and USB serial; the track-side server deduplicates the two copies, stores all results in SQLite, and updates the operator console and public display live.
+A local competition system with two live leaderboards: the sensor-timed **Tarmo Live** race and the manually measured **Cannon Clash**. Two VL53L0X sensors must agree on a race crossing before the ESP32-C3 emits an event. Every event is sent over Wi-Fi and USB serial; the track-side server deduplicates the two copies, stores all results in SQLite, and updates the operator console and public display live.
 
 ## How a race works
 
@@ -10,12 +10,35 @@ A local competition system with two live classifications: the sensor-timed **Tar
 4. The firmware's microsecond clock supplies the official elapsed time, so network or USB latency does not affect the result.
 5. The result is persisted and appears immediately on `/leaderboard`, sorted fastest first.
 
+## Sensing glossary
+
+| Term | Meaning in this project |
+|---|---|
+| **Arm** | The operator registers a driver and tells the server that the next confirmed crossing should start that driver's lap. |
+| **Armed** | A race is waiting for its first confirmed crossing. The sensors continue running whether or not a race is armed. |
+| **Raw sample** | One distance and range-status result returned by a VL53L0X sensor. Raw samples are not logged individually. |
+| **Near reading** | A raw sample whose distance is inside `DETECTION_MIN_MM` through `DETECTION_MAX_MM` and whose current range status is accepted by the firmware. |
+| **Stable** | A condition that has remained consistent for the configured number of consecutive samples, rather than appearing in only one potentially noisy sample. |
+| **Stable-near** | A sensor has produced `REQUIRED_NEAR_SAMPLES` consecutive near readings. With the current configuration, this means two readings. |
+| **Activated** | The transition from not-near to stable-near. It creates a crossing candidate and emits `sensor_activated`. |
+| **Crossing candidate** | A remembered sensor activation waiting for the other sensor to activate within `SENSOR_COINCIDENCE_MS`. |
+| **Coincidence window** | The maximum permitted difference between the two activation times. It is currently 120 ms. |
+| **Confirmed crossing** | Both sensors became stable-near inside the coincidence window. One timestamped crossing event is then emitted over USB and queued for Wi-Fi. |
+| **Single-sensor rejection** | One sensor activated but the other did not join it inside the coincidence window. It emits `sensor_single_rejected` and creates no crossing. |
+| **Lockout** | The period after a confirmed crossing during which another crossing cannot be emitted. It prevents one car pass or reflection from being counted repeatedly. |
+| **Clear reading** | A raw sample that does not qualify as near. |
+| **Stable-clear** | A sensor has produced `REQUIRED_CLEAR_SAMPLES` consecutive clear readings. With the current configuration, this means three readings. |
+| **Cleared** | The transition from stable-near to stable-clear. It emits `sensor_cleared`. |
+| **Re-arm / re-armed** | The timing gate becomes ready to detect another crossing after both sensors are stable-clear and the crossing lockout has elapsed. It emits `gate_rearmed`. This is separate from arming a driver's race. |
+| **Device timestamp** | The ESP32's microsecond timestamp attached to a confirmed crossing. The server subtracts the first timestamp from the second to calculate the lap time. |
+| **Duplicate event** | The same crossing arrives through USB and Wi-Fi with the same event ID. The server accepts it once and logs the other delivery as `event_duplicate`. |
+
 ## How Cannon Clash works
 
 1. In `/operator`, select **Cannon Clash**.
 2. Enter the participant, measured distance, and measurement unit.
 3. Record as many attempts as needed. Every attempt is retained in SQLite.
-4. The public classification shows each participant once, ranked by their longest attempt.
+4. The public leaderboard shows each participant once, ranked by their longest attempt.
 
 Distances can be entered in metres, centimetres, feet, inches, or millimetres. The server normalizes them to millimetres before comparison. The public display starts in split mode; use its controls to show only Tarmo Live, only Cannon Clash, or enter fullscreen. The selected layout is also addressable with `?view=both`, `?view=race`, or `?view=cannon`.
 
@@ -26,6 +49,69 @@ firmware/           ESP32-C3 PlatformIO/Arduino firmware
 server/             Zero-dependency Python race server and USB bridge
 server/static/      Operator and leaderboard web screens
 tests/              Server and timing tests
+```
+
+## Setup guide
+
+The track-side server supports Python 3.10 or newer on macOS or Linux. It has no third-party Python dependencies, but a `requirements.txt` is included so the usual virtual-environment workflow remains reproducible.
+
+### 1. Download and prepare the server
+
+```bash
+git clone https://github.com/IamAbhinav03/tarmo-live-race-leaderboard.git
+cd tarmo-live-race-leaderboard
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+cp server/config.example.json server/config.json
+```
+
+The default configuration listens on port `8080`, stores persistent data in `server/data/races.db`, and automatically discovers common USB serial devices. To run without an ESP32 connected, change `serial_port` in `server/config.json` from `"auto"` to `null`.
+
+### 2. Start the leaderboard server
+
+Run this command from the repository root:
+
+```bash
+python3 server/app.py
+```
+
+Keep that terminal open. Then open:
+
+- Operator console: [http://localhost:8080/operator](http://localhost:8080/operator)
+- Competition display: [http://localhost:8080/leaderboard](http://localhost:8080/leaderboard)
+
+Other computers on the same network can use `http://TRACK_COMPUTER_IP:8080/operator` and `http://TRACK_COMPUTER_IP:8080/leaderboard`. Allow incoming TCP port `8080` in the computer's firewall if necessary. Stop the server with `Ctrl+C`.
+
+### 3. Configure and upload the ESP32 firmware
+
+1. Install [PlatformIO](https://platformio.org/), or install its extension in VS Code.
+2. Copy `firmware/include/config.example.h` to `firmware/include/local_config.h`.
+3. In `local_config.h`, set the Wi-Fi credentials and set `SERVER_HOST` to the track-side computer's LAN IP address. Use `USE_STATIC_IP 0` while testing on normal Wi-Fi.
+4. Connect the Seeed Studio XIAO ESP32-C3 over USB.
+5. Upload and monitor the firmware:
+
+```bash
+cd firmware
+pio run --target upload
+pio device monitor
+```
+
+Both the computer and ESP32 must be on the same network for Wi-Fi delivery. USB delivery works whenever the ESP32 is connected to the track-side computer, providing the redundant communication path.
+
+### 4. Verify the installation
+
+1. Open the operator console and confirm that the server status is live.
+2. Confirm the timing gate appears after the ESP32 sends its first USB or Wi-Fi event.
+3. Select **Tarmo Live**, register a test driver, and make two valid crossings.
+4. Select **Cannon Clash**, enter a test distance, and confirm it appears on the public display.
+5. On the public display, verify the **Split**, **Tarmo Live**, **Cannon Clash**, and **Fullscreen** controls.
+
+To run the automated checks:
+
+```bash
+python3 -m unittest discover -s tests -v
+node tests/test_leaderboard.cjs
 ```
 
 ## Hardware wiring
@@ -54,19 +140,7 @@ The firmware targets the Seeed Studio XIAO ESP32-C3 using PlatformIO's `seeed_xi
 
 For breadboard testing on ordinary Wi-Fi, set `USE_STATIC_IP` to `0`. The ESP32 will obtain its own address with DHCP; `SERVER_HOST` must still be the current LAN address of the computer running the race server. For the final track installation, reserve addresses on the router or set `USE_STATIC_IP` to `1` with confirmed network values.
 
-## Track-side server
-
-Python 3.10 or newer is sufficient; no packages need to be installed.
-
-```bash
-cp server/config.example.json server/config.json
-python3 server/app.py
-```
-
-Open:
-
-- Operator console: `http://localhost:8080/operator`
-- Live leaderboard: `http://localhost:8080/leaderboard`
+## Track-side server details
 
 The server automatically looks for `/dev/cu.usbmodem*` and `/dev/cu.usbserial*` on macOS and `/dev/ttyACM*` or `/dev/ttyUSB*` on Linux. To select a device explicitly, set `serial_port` in `server/config.json`. Set it to `null` to disable USB ingestion.
 
@@ -148,7 +222,7 @@ python3 -m unittest discover -s tests -v
 node tests/test_leaderboard.cjs
 ```
 
-The leaderboard regression test verifies that sensor telemetry, duplicate deliveries, and unchanged state envelopes do not rebuild or reanimate either classification. Only a genuine change to the corresponding race or cannon ranking may replace its rows.
+The leaderboard regression test verifies that sensor telemetry, duplicate deliveries, and unchanged state envelopes do not rebuild or reanimate either leaderboard. Only a genuine change to the corresponding race or cannon ranking may replace its rows.
 
 ### Breadboard test sequence
 
