@@ -19,10 +19,10 @@ A local competition system with two live leaderboards: the sensor-timed **Tarmo 
 | **Raw sample** | One distance and range-status result returned by a VL53L0X sensor. Raw samples are not logged individually. |
 | **Near reading** | A raw sample whose distance is inside `DETECTION_MIN_MM` through `DETECTION_MAX_MM` and whose current range status is accepted by the firmware. |
 | **Stable** | A condition that has remained consistent for the configured number of consecutive samples, rather than appearing in only one potentially noisy sample. |
-| **Stable-near** | A sensor has produced `REQUIRED_NEAR_SAMPLES` consecutive near readings. With the current configuration, this means two readings. |
+| **Stable-near** | A sensor has produced `REQUIRED_NEAR_SAMPLES` consecutive valid near readings. The race configuration uses one strict status-0 sample from each of the two sensors, so every crossing still requires two independent confirmations. |
 | **Activated** | The transition from not-near to stable-near. It creates a crossing candidate and emits `sensor_activated`. |
 | **Crossing candidate** | A remembered sensor activation waiting for the other sensor to activate within `SENSOR_COINCIDENCE_MS`. |
-| **Coincidence window** | The maximum permitted difference between the two activation times. It is currently 120 ms. |
+| **Coincidence window** | The maximum permitted difference between the two activation times. It is currently 300 ms. |
 | **Confirmed crossing** | Both sensors became stable-near inside the coincidence window. One timestamped crossing event is then emitted over USB and queued for Wi-Fi. |
 | **Single-sensor rejection** | One sensor activated but the other did not join it inside the coincidence window. It emits `sensor_single_rejected` and creates no crossing. |
 | **Lockout** | The period after a confirmed crossing during which another crossing cannot be emitted. It prevents one car pass or reflection from being counted repeatedly. |
@@ -163,6 +163,19 @@ The server records every transport attempt, not only the first copy of an event:
 - `wifi_connected`, `wifi_disconnected`, `wifi_delivery_failed`, `wifi_delivery_restored`: firmware connectivity transitions received over USB.
 
 Fine-grained sensor telemetry is intentionally USB-only. Sending every sensor transition over Wi-Fi would add blocking network work to the measurement loop and could displace official crossings from the retry queue. Official crossing events still use both USB and Wi-Fi with the same event ID.
+
+### Tuning the minimum MCPS value
+
+The operator page has a persistent **Minimum MCPS** control beside the live sensor readings. It filters otherwise valid status-0 readings whose returned target signal is weaker than the configured floor. The server saves the value in SQLite, sends it to the ESP32 immediately over USB, and reapplies it whenever the board reconnects.
+
+1. Start at `0.00` so no status-0 reading is removed by the signal filter.
+2. Make at least five full-speed passes with the real car.
+3. Set the audit-log filter to **Sensors** and record `signal_rate_mcps` from every genuine `sensor_activated` entry for both A and B.
+4. Start with 70–80% of the weakest genuine activation. For example, if the weakest car reading is `0.60 MCPS`, try `0.45 MCPS`.
+5. Leave the track idle for several minutes. If false activations remain, increase the value by only `0.05 MCPS`, then repeat the full-speed car test.
+6. If false readings overlap the genuine car's signal rates, no MCPS threshold can separate them reliably. Improve physical shading, alignment, or the background target instead of raising the floor until the car is missed.
+
+The panel distinguishes the saved **Configured** value from the value reported by the firmware as **ESP applied**. `USB live` confirms that changes can currently reach the board.
 
 Recent logs are available as JSON at `GET /api/logs?limit=250`. Up to 1,000 rows can be requested at once, and older pages use `before_id`. Logs remain in SQLite across restarts. `audit_log_limit` defaults to 100,000 rows so a long-running noisy sensor cannot fill the computer's disk; increase it in `server/config.json` if longer retention is required.
 

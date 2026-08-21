@@ -237,7 +237,17 @@ button.danger { color: #ff9b7c; }
 .sensor-monitor-head { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-bottom:18px; }
 .sensor-monitor-head h2 { margin:8px 0 0; text-transform:uppercase; font-size:32px; }
 .monitor-chips { display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+.sensor-monitor-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(300px,390px); gap:16px; align-items:stretch; }
 .sensor-live-list { display:grid; gap:8px; }
+.sensor-tuning { border:1px solid var(--line); border-radius:12px; background:#080a0d; padding:18px; }
+.sensor-tuning h3 { margin:8px 0 18px; color:var(--white); font-size:24px; text-transform:uppercase; }
+.sensor-tuning label { margin-bottom:7px; }
+.sensor-tuning p { margin:14px 0 0; color:var(--muted); font:400 10px/1.55 ui-monospace,monospace; }
+.sensor-tuning p strong { color:var(--cyan); }
+.mcps-control-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; }
+.mcps-control-row input { min-width:0; }
+.mcps-state { margin-top:12px; color:var(--muted); font:400 9px/1.5 ui-monospace,monospace; text-transform:uppercase; }
+.form-message.success { color:var(--acid); }
 .sensor-live-row {
   display:grid; grid-template-columns:54px minmax(0,1fr) auto; align-items:center; gap:16px;
   min-height:76px; padding:10px 18px; border:1px solid var(--line); border-radius:12px;
@@ -299,6 +309,7 @@ button.compact.paused { color:var(--acid); border-color:rgba(var(--accent-rgb),.
   .cannon-strip { grid-template-columns:1fr; gap:16px; }
   .distance-fields { grid-template-columns:1fr; }
   .sensor-monitor-head { align-items:flex-start; flex-direction:column; }
+  .sensor-monitor-grid { grid-template-columns:1fr; }
   .monitor-chips { justify-content:flex-start; }
   .sensor-live-row { grid-template-columns:44px minmax(0,1fr) auto; padding:10px 12px; }
   .sensor-reading { align-items:flex-start; flex-direction:column; gap:4px; }

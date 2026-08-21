@@ -9,9 +9,16 @@ const activeContent = document.querySelector("#active-content");
 const logList = document.querySelector("#log-list");
 const logFilter = document.querySelector("#log-filter");
 const pauseLogs = document.querySelector("#pause-logs");
+const mcpsForm = document.querySelector("#mcps-form");
+const mcpsInput = document.querySelector("#mcps-input");
+const mcpsApply = document.querySelector("#mcps-apply");
+const mcpsState = document.querySelector("#mcps-state");
+const mcpsMessage = document.querySelector("#mcps-message");
 let auditLogs = [];
 let logsPaused = false;
 let selectedCompetition = "race";
+let mcpsInputDirty = false;
+let deviceConfig = null;
 const sensorRows = {
   sensor_a: document.querySelector("#sensor-a-row"),
   sensor_b: document.querySelector("#sensor-b-row"),
@@ -48,6 +55,33 @@ form.addEventListener("submit", async (event) => {
     message.textContent = error.message;
   } finally {
     updateFormAvailability();
+  }
+});
+
+mcpsInput.addEventListener("input", () => { mcpsInputDirty = true; });
+
+mcpsForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  mcpsMessage.textContent = "";
+  mcpsMessage.classList.remove("success");
+  const value = Number(mcpsInput.value);
+  if (!Number.isFinite(value) || value < 0 || value > 20) {
+    mcpsMessage.textContent = "Enter a value between 0.00 and 20.00 MCPS.";
+    return;
+  }
+  mcpsApply.disabled = true;
+  try {
+    deviceConfig = await post("/api/device/config", { min_signal_rate_mcps: value });
+    mcpsInputDirty = false;
+    renderDeviceConfig(deviceConfig);
+    mcpsMessage.textContent = deviceConfig.command_sent
+      ? "Saved and sent to the ESP32."
+      : "Saved. It will be applied when USB reconnects.";
+    mcpsMessage.classList.add("success");
+  } catch (error) {
+    mcpsMessage.textContent = error.message;
+  } finally {
+    mcpsApply.disabled = false;
   }
 });
 
@@ -166,7 +200,7 @@ function renderSensor(channel, sensor, receivedAt) {
     ? "Stale"
     : detected ? "Detected" : candidate ? "Candidate" : "Clear";
   document.querySelector(`#sensor-${suffix}-meta`).textContent = sensor
-    ? `Range status ${sensor.range_status} · ${sensor.near ? "stable-near" : "stable-clear"} · raw ${distance} mm`
+    ? `Range status ${sensor.range_status} · ${sensor.near ? "stable-near" : "stable-clear"} · raw ${distance} mm · signal ${Number(sensor.signal_rate_mcps || 0).toFixed(3)} MCPS`
     : "Waiting for USB telemetry";
 }
 
@@ -176,6 +210,31 @@ function renderSensors(snapshot) {
   const gateChip = document.querySelector("#gate-chip");
   gateChip.textContent = snapshot?.gate_locked ? "Gate locked" : snapshot ? "Gate ready" : "Gate waiting";
   gateChip.classList.toggle("live", Boolean(snapshot) && !snapshot.gate_locked);
+  if (snapshot && deviceConfig) {
+    deviceConfig.applied_min_signal_rate_mcps = snapshot.min_signal_rate_mcps;
+    renderDeviceConfig(deviceConfig);
+  }
+}
+
+function renderDeviceConfig(config) {
+  if (!config) return;
+  const configured = Number(config.min_signal_rate_mcps || 0);
+  const applied = Number(config.applied_min_signal_rate_mcps);
+  if (!mcpsInputDirty && document.activeElement !== mcpsInput) {
+    mcpsInput.value = configured.toFixed(2);
+  }
+  mcpsState.textContent = `Configured ${configured.toFixed(3)} MCPS · ESP applied ${Number.isFinite(applied) ? `${applied.toFixed(3)} MCPS` : "unknown"} · USB ${config.usb_connected ? "live" : "offline"}`;
+}
+
+async function refreshDeviceConfig() {
+  try {
+    const response = await fetch("/api/device/config", { cache: "no-store" });
+    if (!response.ok) throw new Error("Configuration request failed");
+    deviceConfig = await response.json();
+    renderDeviceConfig(deviceConfig);
+  } catch (_error) {
+    mcpsState.textContent = "Configuration unavailable · USB state unknown";
+  }
 }
 
 async function refreshSensors() {
@@ -251,3 +310,5 @@ refreshLogs();
 setInterval(refreshLogs, 1000);
 refreshSensors();
 setInterval(refreshSensors, 250);
+refreshDeviceConfig();
+setInterval(refreshDeviceConfig, 5000);

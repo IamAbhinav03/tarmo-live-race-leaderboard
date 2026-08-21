@@ -73,17 +73,33 @@
           <span class="status-chip"><span class="status-dot" id="server-dot"></span><span id="server-status">Connecting</span></span>
         </div>
       </div>
-      <div class="sensor-live-list" aria-live="polite">
-        <article class="sensor-live-row" id="sensor-a-row">
-          <span class="sensor-channel">A</span>
-          <div class="sensor-reading"><strong id="sensor-a-distance">—</strong><small id="sensor-a-meta">Waiting for USB telemetry</small></div>
-          <span class="sensor-state" id="sensor-a-state">Waiting</span>
-        </article>
-        <article class="sensor-live-row" id="sensor-b-row">
-          <span class="sensor-channel">B</span>
-          <div class="sensor-reading"><strong id="sensor-b-distance">—</strong><small id="sensor-b-meta">Waiting for USB telemetry</small></div>
-          <span class="sensor-state" id="sensor-b-state">Waiting</span>
-        </article>
+      <div class="sensor-monitor-grid">
+        <div class="sensor-live-list" aria-live="polite">
+          <article class="sensor-live-row" id="sensor-a-row">
+            <span class="sensor-channel">A</span>
+            <div class="sensor-reading"><strong id="sensor-a-distance">—</strong><small id="sensor-a-meta">Waiting for USB telemetry</small></div>
+            <span class="sensor-state" id="sensor-a-state">Waiting</span>
+          </article>
+          <article class="sensor-live-row" id="sensor-b-row">
+            <span class="sensor-channel">B</span>
+            <div class="sensor-reading"><strong id="sensor-b-distance">—</strong><small id="sensor-b-meta">Waiting for USB telemetry</small></div>
+            <span class="sensor-state" id="sensor-b-state">Waiting</span>
+          </article>
+        </div>
+        <aside class="sensor-tuning" aria-labelledby="mcps-title">
+          <div class="panel-kicker">Detection sensitivity</div>
+          <h3 id="mcps-title">Minimum MCPS</h3>
+          <form id="mcps-form">
+            <label for="mcps-input">Target signal floor</label>
+            <div class="mcps-control-row">
+              <input id="mcps-input" type="number" min="0" max="20" step="0.05" value="0.00" required>
+              <button class="secondary compact" id="mcps-apply" type="submit">Apply</button>
+            </div>
+          </form>
+          <div class="mcps-state" id="mcps-state">Loading sensor configuration…</div>
+          <p>0.00 keeps every status-0 return. For tuning, find the weakest real-car <strong>signal_rate_mcps</strong> in the sensor logs and set this to 70–80% of that value.</p>
+          <div class="form-message" id="mcps-message" role="alert"></div>
+        </aside>
       </div>
     </section>
 

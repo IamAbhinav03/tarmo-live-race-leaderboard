@@ -24,7 +24,7 @@
 namespace {
 
 constexpr size_t kEventQueueSize = 16;
-constexpr size_t kJsonSize = 384;
+constexpr size_t kJsonSize = 512;
 
 Adafruit_VL53L0X sensorA;
 Adafruit_VL53L0X sensorB;
@@ -34,6 +34,8 @@ enum class RangingSensor : uint8_t { A, B };
 struct SensorState {
   uint16_t distanceMm = 8190;
   uint8_t rangeStatus = 0;
+  float signalRateMcps = 0.0f;
+  float ambientRateMcps = 0.0f;
   uint8_t nearSamples = 0;
   uint8_t clearSamples = 0;
   bool near = false;
@@ -64,6 +66,7 @@ bool wifiConnectionReported = false;
 bool rangeInProgress = false;
 RangingSensor rangingSensor = RangingSensor::A;
 int lastWifiDeliveryStatus = 0;
+float detectionMinSignalRateMcps = DETECTION_MIN_SIGNAL_RATE_MCPS;
 
 bool elapsedAtLeast(uint32_t now, uint32_t then, uint32_t interval) {
   return static_cast<uint32_t>(now - then) >= interval;
@@ -71,7 +74,7 @@ bool elapsedAtLeast(uint32_t now, uint32_t then, uint32_t interval) {
 
 void emitFirmwareLog(const char *level, const char *code, const char *message,
                      const char *sensor = nullptr, uint16_t distanceMm = 0,
-                     uint8_t rangeStatus = 0) {
+                     uint8_t rangeStatus = 0, float signalRateMcps = 0.0f) {
   ++eventSequence;
   char eventId[80];
   snprintf(eventId, sizeof(eventId), "%s-%08lx-%lu", DEVICE_ID,
@@ -84,10 +87,11 @@ void emitFirmwareLog(const char *level, const char *code, const char *message,
         "{\"event_id\":\"%s\",\"device_id\":\"%s\",\"boot_id\":\"%08lx\","
         "\"sequence\":%lu,\"type\":\"log\",\"device_time_us\":%lld,"
         "\"level\":\"%s\",\"code\":\"%s\",\"message\":\"%s\","
-        "\"sensor\":\"%s\",\"distance_mm\":%u,\"range_status\":%u}",
+        "\"sensor\":\"%s\",\"distance_mm\":%u,\"range_status\":%u,"
+        "\"signal_rate_mcps\":%.4f}",
         eventId, DEVICE_ID, static_cast<unsigned long>(bootId),
         static_cast<unsigned long>(eventSequence), static_cast<long long>(esp_timer_get_time()),
-        level, code, message, sensor, distanceMm, rangeStatus);
+        level, code, message, sensor, distanceMm, rangeStatus, signalRateMcps);
   } else {
     snprintf(
         json, sizeof(json),
@@ -103,16 +107,58 @@ void emitFirmwareLog(const char *level, const char *code, const char *message,
   Serial.println(json);
 }
 
-bool isValidNearReading(uint16_t distanceMm, uint8_t rangeStatus) {
+bool isValidNearReading(uint16_t distanceMm, uint8_t rangeStatus,
+                        float signalRateMcps) {
   // The ST/Adafruit API defines only status 0 as a valid range. In particular,
   // status 2 is a signal failure and must never become a detection candidate.
-  return rangeStatus == 0 && distanceMm >= DETECTION_MIN_MM && distanceMm <= DETECTION_MAX_MM;
+  return rangeStatus == 0 && distanceMm >= DETECTION_MIN_MM &&
+         distanceMm <= DETECTION_MAX_MM &&
+         signalRateMcps >= detectionMinSignalRateMcps;
+}
+
+void processSerialCommands() {
+  static char command[96] = {};
+  static size_t commandLength = 0;
+
+  while (Serial.available() > 0) {
+    const char next = static_cast<char>(Serial.read());
+    if (next == '\r') {
+      continue;
+    }
+    if (next != '\n') {
+      if (commandLength + 1 < sizeof(command)) {
+        command[commandLength++] = next;
+      } else {
+        commandLength = 0;
+        emitFirmwareLog("warning", "detection_config_rejected",
+                        "Serial configuration command was too long");
+      }
+      continue;
+    }
+
+    command[commandLength] = '\0';
+    float requestedMcps = 0.0f;
+    char trailing = '\0';
+    const int fields = sscanf(command, "SET_MIN_SIGNAL_MCPS %f %c",
+                              &requestedMcps, &trailing);
+    if (fields == 1 && isfinite(requestedMcps) && requestedMcps >= 0.0f &&
+        requestedMcps <= 20.0f) {
+      detectionMinSignalRateMcps = requestedMcps;
+      emitFirmwareLog("info", "detection_config_updated",
+                      "Minimum target signal rate updated over USB");
+    } else if (commandLength > 0) {
+      emitFirmwareLog("warning", "detection_config_rejected",
+                      "Invalid minimum target signal rate command");
+    }
+    commandLength = 0;
+  }
 }
 
 void updateSensorState(SensorState &state, uint16_t distanceMm, uint8_t rangeStatus, uint32_t nowMs) {
   state.distanceMm = distanceMm;
   state.rangeStatus = rangeStatus;
-  const bool sampleNear = isValidNearReading(distanceMm, rangeStatus);
+  const bool sampleNear =
+      isValidNearReading(distanceMm, rangeStatus, state.signalRateMcps);
 
   if (sampleNear) {
     state.clearSamples = 0;
@@ -207,14 +253,14 @@ void updateCrossingDetector(uint32_t nowMs) {
     stateA.detectionSeen = false;
     emitFirmwareLog("warning", "sensor_single_rejected",
                     "Sensor A activation expired without Sensor B", "A",
-                    stateA.distanceMm, stateA.rangeStatus);
+                    stateA.distanceMm, stateA.rangeStatus, stateA.signalRateMcps);
   }
   if (stateB.detectionSeen && !stateA.detectionSeen &&
       elapsedAtLeast(nowMs, stateB.detectedAtMs, SENSOR_COINCIDENCE_MS)) {
     stateB.detectionSeen = false;
     emitFirmwareLog("warning", "sensor_single_rejected",
                     "Sensor B activation expired without Sensor A", "B",
-                    stateB.distanceMm, stateB.rangeStatus);
+                    stateB.distanceMm, stateB.rangeStatus, stateB.signalRateMcps);
   }
 }
 
@@ -240,14 +286,35 @@ bool initializeSensors() {
   }
 
 #if SENSOR_LONG_RANGE_MODE
-  sensorA.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_LONG_RANGE);
-  sensorB.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_LONG_RANGE);
+  const bool sensorAConfigured =
+      sensorA.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_LONG_RANGE);
+  const bool sensorBConfigured =
+      sensorB.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_LONG_RANGE);
 #else
-  sensorA.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_HIGH_SPEED);
-  sensorB.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_HIGH_SPEED);
+  const bool sensorAConfigured =
+      sensorA.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_HIGH_SPEED);
+  const bool sensorBConfigured =
+      sensorB.configSensor(Adafruit_VL53L0X::VL53L0X_SENSE_HIGH_SPEED);
 #endif
-  sensorA.setMeasurementTimingBudgetMicroSeconds(SENSOR_TIMING_BUDGET_US);
-  sensorB.setMeasurementTimingBudgetMicroSeconds(SENSOR_TIMING_BUDGET_US);
+  const FixPoint1616_t signalRateLimit = static_cast<FixPoint1616_t>(
+      SENSOR_SIGNAL_RATE_LIMIT_MCPS * 65536.0f);
+  const bool sensorASettingsApplied =
+      sensorAConfigured &&
+      sensorA.setLimitCheckEnable(VL53L0X_CHECKENABLE_RANGE_IGNORE_THRESHOLD, 0) &&
+      sensorA.setLimitCheckValue(VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE,
+                                 signalRateLimit) &&
+      sensorA.setMeasurementTimingBudgetMicroSeconds(SENSOR_TIMING_BUDGET_US);
+  const bool sensorBSettingsApplied =
+      sensorBConfigured &&
+      sensorB.setLimitCheckEnable(VL53L0X_CHECKENABLE_RANGE_IGNORE_THRESHOLD, 0) &&
+      sensorB.setLimitCheckValue(VL53L0X_CHECKENABLE_SIGNAL_RATE_FINAL_RANGE,
+                                 signalRateLimit) &&
+      sensorB.setMeasurementTimingBudgetMicroSeconds(SENSOR_TIMING_BUDGET_US);
+  if (!sensorASettingsApplied || !sensorBSettingsApplied) {
+    emitFirmwareLog("error", "sensor_config_failed",
+                    "VL53L0X ranging configuration failed");
+    return false;
+  }
   rangingSensor = RangingSensor::A;
   rangeInProgress = sensorA.startRange();
   if (!rangeInProgress) {
@@ -339,16 +406,28 @@ void deliverPendingWifi(uint32_t nowMs) {
 void processCompletedReading(Adafruit_VL53L0X &sensor, SensorState &state,
                              const char *sensorName, const char *activatedMessage,
                              const char *clearedMessage) {
-  const uint16_t distanceMm = sensor.readRangeResult();
-  const uint8_t rangeStatus = sensor.readRangeStatus();
+  VL53L0X_RangingMeasurementData_t measurement = {};
+  const VL53L0X_Error readStatus = sensor.getRangingMeasurement(&measurement);
+  sensor.clearInterruptMask();
+  if (readStatus != VL53L0X_ERROR_NONE) {
+    emitFirmwareLog("error", "sensor_read_failed",
+                    "VL53L0X measurement read failed", sensorName);
+    return;
+  }
+  const uint16_t distanceMm = measurement.RangeMilliMeter;
+  const uint8_t rangeStatus = measurement.RangeStatus;
+  state.signalRateMcps =
+      static_cast<float>(measurement.SignalRateRtnMegaCps) / 65536.0f;
+  state.ambientRateMcps =
+      static_cast<float>(measurement.AmbientRateRtnMegaCps) / 65536.0f;
   const bool wasNear = state.near;
   updateSensorState(state, distanceMm, rangeStatus, millis());
   if (!wasNear && state.near) {
     emitFirmwareLog("info", "sensor_activated", activatedMessage, sensorName,
-                    distanceMm, rangeStatus);
+                    distanceMm, rangeStatus, state.signalRateMcps);
   } else if (wasNear && !state.near) {
     emitFirmwareLog("info", "sensor_cleared", clearedMessage, sensorName,
-                    distanceMm, rangeStatus);
+                    distanceMm, rangeStatus, state.signalRateMcps);
   }
 }
 
@@ -380,18 +459,27 @@ void emitSensorStatus() {
   Serial.printf(
       "{\"type\":\"sensor_status\",\"device_id\":\"%s\",\"boot_id\":\"%08lx\","
       "\"device_time_us\":%lld,\"a_mm\":%u,\"a_status\":%u,\"a_near\":%u,"
-      "\"a_candidate\":%u,\"b_mm\":%u,\"b_status\":%u,\"b_near\":%u,"
-      "\"b_candidate\":%u,\"gate_locked\":%u}\n",
+      "\"a_candidate\":%u,\"a_signal_mcps\":%.4f,\"a_ambient_mcps\":%.4f,"
+      "\"b_mm\":%u,\"b_status\":%u,\"b_near\":%u,\"b_candidate\":%u,"
+      "\"b_signal_mcps\":%.4f,\"b_ambient_mcps\":%.4f,\"gate_locked\":%u,"
+      "\"min_signal_mcps\":%.4f}\n",
       DEVICE_ID, static_cast<unsigned long>(bootId),
       static_cast<long long>(esp_timer_get_time()), stateA.distanceMm,
       stateA.rangeStatus, stateA.near ? 1 : 0, stateA.detectionSeen ? 1 : 0,
+      stateA.signalRateMcps, stateA.ambientRateMcps,
       stateB.distanceMm, stateB.rangeStatus, stateB.near ? 1 : 0,
-      stateB.detectionSeen ? 1 : 0, crossingLocked ? 1 : 0);
+      stateB.detectionSeen ? 1 : 0, stateB.signalRateMcps,
+      stateB.ambientRateMcps, crossingLocked ? 1 : 0,
+      detectionMinSignalRateMcps);
 }
 
 }  // namespace
 
 void setup() {
+  // Live diagnostic frames exceed the ESP32-C3 HW-CDC default 256-byte TX
+  // ring. A larger ring prevents adjacent JSON frames from being truncated or
+  // joined when the host reads USB in small chunks.
+  Serial.setTxBufferSize(1024);
   Serial.begin(115200);
   delay(1000);
   bootId = esp_random();
@@ -412,6 +500,7 @@ void setup() {
 }
 
 void loop() {
+  processSerialCommands();
   readSensors();
   // Capture time after polling: a completed asynchronous measurement may have
   // set detectedAtMs during readSensors(), and nowMs must not predate it.

@@ -96,6 +96,11 @@ class RaceStore:
                     distance_mm INTEGER NOT NULL CHECK(distance_mm > 0),
                     recorded_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS device_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_races_status ON races(status);
                 CREATE INDEX IF NOT EXISTS idx_races_elapsed ON races(elapsed_us) WHERE status = 'complete';
                 CREATE INDEX IF NOT EXISTS idx_device_events_received ON device_events(received_at);
@@ -106,6 +111,35 @@ class RaceStore:
                 PRAGMA optimize;
                 """
             )
+
+    def get_min_signal_rate_mcps(self) -> float:
+        with self.lock:
+            row = self.connection.execute(
+                "SELECT value FROM device_settings WHERE key = 'min_signal_rate_mcps'"
+            ).fetchone()
+        return float(row["value"]) if row else 0.0
+
+    def set_min_signal_rate_mcps(self, value: Any) -> float:
+        try:
+            normalized = Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            raise RaceError("Minimum MCPS must be a number") from None
+        if not normalized.is_finite() or normalized < 0 or normalized > 20:
+            raise RaceError("Minimum MCPS must be between 0 and 20")
+        normalized = normalized.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+        result = float(normalized)
+        with self.lock, self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO device_settings(key, value, updated_at)
+                VALUES ('min_signal_rate_mcps', ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (format(normalized, "f"), utc_now()),
+            )
+        return result
 
     def close(self) -> None:
         with self.lock:
@@ -548,6 +582,7 @@ class Runtime:
     emulator_enabled: bool = False
     sensor_lock: threading.Lock = field(default_factory=threading.Lock)
     sensor_status: dict[str, Any] | None = None
+    serial_bridge: SerialBridge | None = None
 
     def update_sensor_status(self, event: dict[str, Any]) -> None:
         try:
@@ -557,15 +592,20 @@ class Runtime:
                 "device_time_us": int(event["device_time_us"]),
                 "received_at": utc_now(),
                 "gate_locked": bool(int(event.get("gate_locked", 0))),
+                "min_signal_rate_mcps": float(event.get("min_signal_mcps", 0)),
                 "sensor_a": {
                     "distance_mm": int(event["a_mm"]),
                     "range_status": int(event["a_status"]),
+                    "signal_rate_mcps": float(event.get("a_signal_mcps", 0)),
+                    "ambient_rate_mcps": float(event.get("a_ambient_mcps", 0)),
                     "near": bool(int(event.get("a_near", 0))),
                     "candidate": bool(int(event.get("a_candidate", 0))),
                 },
                 "sensor_b": {
                     "distance_mm": int(event["b_mm"]),
                     "range_status": int(event["b_status"]),
+                    "signal_rate_mcps": float(event.get("b_signal_mcps", 0)),
+                    "ambient_rate_mcps": float(event.get("b_ambient_mcps", 0)),
                     "near": bool(int(event.get("b_near", 0))),
                     "candidate": bool(int(event.get("b_candidate", 0))),
                 },
@@ -583,6 +623,31 @@ class Runtime:
     def sensor_snapshot(self) -> dict[str, Any] | None:
         with self.sensor_lock:
             return dict(self.sensor_status) if self.sensor_status else None
+
+    def device_config(self) -> dict[str, Any]:
+        snapshot = self.sensor_snapshot()
+        bridge = self.serial_bridge
+        return {
+            "min_signal_rate_mcps": self.store.get_min_signal_rate_mcps(),
+            "applied_min_signal_rate_mcps": (
+                snapshot.get("min_signal_rate_mcps") if snapshot else None
+            ),
+            "usb_connected": bool(bridge and bridge.connected),
+        }
+
+    def set_device_config(self, value: Any) -> dict[str, Any]:
+        normalized = self.store.set_min_signal_rate_mcps(value)
+        bridge = self.serial_bridge
+        command_sent = bool(bridge and bridge.send_min_signal_rate(normalized))
+        self.store.record_log(
+            "info", "operator", "sensor_config_updated",
+            "Minimum target signal rate configuration updated",
+            transport="usb" if command_sent else None,
+            details={"min_signal_rate_mcps": normalized, "command_sent": command_sent},
+        )
+        result = self.device_config()
+        result["command_sent"] = command_sent
+        return result
 
 
 class RaceRequestHandler(BaseHTTPRequestHandler):
@@ -615,6 +680,8 @@ class RaceRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"logs": self.runtime.store.logs(limit, before_id)})
         elif path == "/api/sensors":
             self._send_json({"sensors": self.runtime.sensor_snapshot()})
+        elif path == "/api/device/config":
+            self._send_json(self.runtime.device_config())
         elif path == "/health":
             self._send_json({"ok": True})
         elif path == "/operator":
@@ -651,6 +718,10 @@ class RaceRequestHandler(BaseHTTPRequestHandler):
                 if result.get("race_changed"):
                     self.runtime.bus.publish()
                 self._send_json(result)
+            elif path == "/api/device/config":
+                self._send_json(self.runtime.set_device_config(
+                    body.get("min_signal_rate_mcps")
+                ))
             elif path == "/api/emulator/events":
                 if not self.runtime.emulator_enabled:
                     self.send_error(HTTPStatus.NOT_FOUND)
@@ -761,6 +832,24 @@ class SerialBridge(threading.Thread):
         self.port_setting = port_setting
         self.baud = baud
         self.stop_event = threading.Event()
+        self.descriptor_lock = threading.Lock()
+        self.descriptor: int | None = None
+
+    @property
+    def connected(self) -> bool:
+        with self.descriptor_lock:
+            return self.descriptor is not None
+
+    def send_min_signal_rate(self, value: float) -> bool:
+        command = f"SET_MIN_SIGNAL_MCPS {value:.4f}\n".encode("ascii")
+        with self.descriptor_lock:
+            descriptor = self.descriptor
+            if descriptor is None:
+                return False
+            try:
+                return os.write(descriptor, command) == len(command)
+            except OSError:
+                return False
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -818,12 +907,35 @@ class SerialBridge(threading.Thread):
             attributes[6][termios.VMIN] = 1
             attributes[6][termios.VTIME] = 0
             termios.tcsetattr(descriptor, termios.TCSANOW, attributes)
+            with self.descriptor_lock:
+                self.descriptor = descriptor
             buffer = bytearray()
+            synchronized = False
+            config_sent = False
             while not self.stop_event.is_set():
                 chunk = os.read(descriptor, 256)
                 if not chunk:
                     raise OSError("serial device closed")
                 buffer.extend(chunk)
+                # The ESP32 streams continuously, so opening the port can land
+                # in the middle of a JSON line. Discard only that first partial
+                # frame and begin parsing at the next newline boundary.
+                if not synchronized:
+                    if b"\n" not in buffer:
+                        continue
+                    _, _, remainder = buffer.partition(b"\n")
+                    buffer = bytearray(remainder)
+                    synchronized = True
+                if synchronized and not config_sent:
+                    value = self.runtime.store.get_min_signal_rate_mcps()
+                    config_sent = self.send_min_signal_rate(value)
+                    if config_sent:
+                        self.runtime.store.record_log(
+                            "info", "usb_bridge", "sensor_config_reapplied",
+                            "Persisted sensor configuration reapplied over USB",
+                            transport="usb",
+                            details={"min_signal_rate_mcps": value},
+                        )
                 while b"\n" in buffer:
                     raw_line, _, remainder = buffer.partition(b"\n")
                     buffer = bytearray(remainder)
@@ -836,6 +948,9 @@ class SerialBridge(threading.Thread):
                     )
                     buffer.clear()
         finally:
+            with self.descriptor_lock:
+                if self.descriptor == descriptor:
+                    self.descriptor = None
             os.close(descriptor)
 
     def _handle_line(self, raw_line: bytes) -> None:
@@ -901,6 +1016,7 @@ def main() -> None:
     RaceRequestHandler.runtime = runtime
     server = ThreadingHTTPServer((str(config["host"]), int(config["port"])), RaceRequestHandler)
     bridge = SerialBridge(runtime, config.get("serial_port"), int(config["serial_baud"]))
+    runtime.serial_bridge = bridge
     store.record_log(
         "info", "server", "server_started",
         f"Server listening on {config['host']}:{config['port']}",

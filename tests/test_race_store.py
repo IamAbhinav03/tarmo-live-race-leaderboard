@@ -231,6 +231,32 @@ class RaceStoreTests(unittest.TestCase):
                 with self.assertRaises(RaceError):
                     self.store.record_cannon_result("Jordan", distance, unit)
 
+    def test_minimum_mcps_setting_is_validated_and_persisted(self):
+        self.assertEqual(self.store.get_min_signal_rate_mcps(), 0.0)
+        self.assertEqual(self.store.set_min_signal_rate_mcps("0.45678"), 0.4568)
+        self.assertEqual(self.store.get_min_signal_rate_mcps(), 0.4568)
+        for invalid in (-0.01, 20.01, "not-a-number", "NaN"):
+            with self.subTest(value=invalid), self.assertRaises(RaceError):
+                self.store.set_min_signal_rate_mcps(invalid)
+
+    def test_runtime_sends_new_mcps_setting_to_serial_bridge(self):
+        class FakeBridge:
+            connected = True
+
+            def __init__(self):
+                self.sent = []
+
+            def send_min_signal_rate(self, value):
+                self.sent.append(value)
+                return True
+
+        bridge = FakeBridge()
+        runtime = Runtime(store=self.store, bus=EventBus(), serial_bridge=bridge)
+        result = runtime.set_device_config("0.35")
+        self.assertEqual(bridge.sent, [0.35])
+        self.assertTrue(result["command_sent"])
+        self.assertEqual(result["min_signal_rate_mcps"], 0.35)
+
 
 if __name__ == "__main__":
     unittest.main()
